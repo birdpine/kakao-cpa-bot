@@ -31,7 +31,7 @@ import logging
 import xml.etree.ElementTree as ET
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 
 app = FastAPI()
 logger = logging.getLogger("kakao_tax_skill")
@@ -242,8 +242,22 @@ async def ask_claude(question: str, law_context: str | None = None) -> str:
     return answer + DISCLAIMER
 
 
+async def process_and_send_callback(question: str, callback_url: str) -> None:
+    """백그라운드에서 실제 답변을 만든 뒤, 완성되면 카카오가 알려준 callbackUrl로 전송"""
+    law_context = await get_law_context(question)
+    answer = await ask_claude(question, law_context)
+    payload = build_kakao_response(answer)
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(callback_url, json=payload)
+            resp.raise_for_status()
+    except Exception:
+        logger.exception("콜백 전송 실패 (callbackUrl=%s)", callback_url)
+
+
 @app.post("/skill")
-async def kakao_skill(request: Request):
+async def kakao_skill(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
 
     # 오픈빌더가 보내는 사용자 발화(질문) 위치
@@ -256,6 +270,21 @@ async def kakao_skill(request: Request):
         return build_kakao_response("질문 내용이 비어 있습니다.")
 
     question = user_utterance.strip()
+
+    # 오픈빌더가 콜백을 지원하면 userRequest.callbackUrl이 함께 옵니다.
+    # (오픈빌더 스킬 설정에서 콜백 사용을 켜둔 경우에만 내려옵니다)
+    callback_url = body.get("userRequest", {}).get("callbackUrl")
+
+    if callback_url:
+        # 1) 카카오에게는 5초 안에 "기다려달라"는 임시 응답만 즉시 반환
+        background_tasks.add_task(process_and_send_callback, question, callback_url)
+        return {
+            "version": "2.0",
+            "useCallback": True,
+            "data": {"text": "답변을 준비하고 있어요. 잠시만 기다려 주세요 🙏"},
+        }
+
+    # 콜백이 지원되지 않는 환경(로컬 테스트 등)에서는 기존처럼 동기 처리
     law_context = await get_law_context(question)
     answer = await ask_claude(question, law_context)
     return build_kakao_response(answer)
