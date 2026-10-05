@@ -17,6 +17,7 @@ Attribute VB_Name = "AptPriceLookup"
 '                (공시일 이전 평가기준일은 직전 연도 가격 적용, 공시일은 설정 시트)
 '   - 실거래가액 : 동·층·전용면적이 평가대상과 일치하는 거래(호수는 미공개 → 추정)
 '   - 매매사례가액 : 상증세법 시행령 제49조 제4항, 시행규칙 제15조 제3항 준용 추정
+'                홈택스 "평가기간 내 유사 물건"과 동일 범위(증여 전6·후3 / 상속 전6·후6)
 '                동일 단지 + 전용면적 차이 5% 이내 + 공동주택가격 차이 5% 이내,
 '                공동주택가격 차이 최소 → 동률 시 평가기준일에 가장 가까운 거래
 '                ※ 홈택스 조회값과 다를 수 있음(호 단위 공시가격 매칭 불가)
@@ -185,7 +186,8 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     PutValue ws.Cells(r, col), CDbl(subj(4))
     AddLog r, sInput, evalDate, "기준시가", yr & "년 공동주택가격", , subj(0), subj(2), subj(3), , subj(4)
 
-    '--- 2) 거래자료 (평가기준일 전 N개월 ~ 후 M개월)
+    '--- 2) 거래자료 : 평가기간(상증세법 제60조 제1항, 시행령 제49조 제1항)
+    '       상속 = 전 6개월 ~ 후 6개월 / 증여 = 전 6개월 ~ 후 3개월
     dtFrom = DateAdd("m", -cfg.MonthsBefore, evalDate)
     dtTo = DateAdd("m", cfg.MonthsAfter, evalDate)
     Set trades = GetComplexTrades(lawd, umd, jibunKey, bdNm, dtFrom, dtTo, msg)
@@ -209,25 +211,28 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
         AddLog r, sInput, evalDate, "실거래(채택)", "평가기준일 최근접", bestOwn(0), bestOwn(2), bestOwn(3), bestOwn(4), bestOwn(5)
     End If
 
-    '--- 4) 유사매매사례가액(추정)
+    '--- 4) 유사매매사례가액 : 홈택스 "(유사)매매 시가(평가기간 내 유사 물건)" 기준
+    '       평가기간 내 동일 단지 거래 전체(해당 재산 거래 포함)를 후보로 하여
+    '       면적·공동주택가격 차이 5% 이내 → 공시가격 차이 최소 → 평가기준일 최근접
     bestDiff = 99
     For Each t In trades
-        If Not IsSameUnit(t, subj) Then
-            areaDiff = Abs(t(4) - subj(3)) / subj(3)
-            If areaDiff <= cfg.RateTol Then
-                cp = AvgPubPrice(units, t)
-                If cp > 0 Then
-                    diff = Abs(cp - subj(4)) / subj(4)
-                    If diff <= cfg.RateTol Then
-                        AddLog r, sInput, evalDate, "유사사례(후보)", "면적차 " & Format$(areaDiff, "0.00%"), _
-                               t(0), t(2), t(3), t(4), t(5), cp, diff
-                        If diff < bestDiff - 0.0000001 Then
-                            bestDiff = diff: bestSim = t
-                        ElseIf Abs(diff - bestDiff) <= 0.0000001 Then
-                            If Abs(t(0) - evalDate) < Abs(bestSim(0) - evalDate) Then bestSim = t
-                        End If
+        areaDiff = Abs(t(4) - subj(3)) / subj(3)
+        If areaDiff <= cfg.RateTol Then
+            cp = AvgPubPrice(units, t)
+            If cp > 0 Then
+                diff = Abs(cp - subj(4)) / subj(4)
+                If diff <= cfg.RateTol Then
+                    AddLog r, sInput, evalDate, "유사사례(평가기간 내)", "면적차 " & Format$(areaDiff, "0.00%"), _
+                           t(0), t(2), t(3), t(4), t(5), cp, diff
+                    If diff < bestDiff - 0.0000001 Then
+                        bestDiff = diff: bestSim = t
+                    ElseIf Abs(diff - bestDiff) <= 0.0000001 Then
+                        If Abs(t(0) - evalDate) < Abs(bestSim(0) - evalDate) Then bestSim = t
                     End If
                 End If
+            Else
+                AddLog r, sInput, evalDate, "유사사례(제외)", "비교세대 공동주택가격 미매칭", _
+                       t(0), t(2), t(3), t(4), t(5)
             End If
         End If
     Next t
@@ -542,11 +547,12 @@ Private Function LoadConfig() As Boolean
         ws.Range("A4:C4").Value = Array("VWorld 인증키", "", "vworld.kr 오픈API 인증키 (공동주택가격속성조회)")
         ws.Range("A5:C5").Value = Array("VWorld 도메인", "", "인증키 발급 시 등록한 서비스 URL")
         ws.Range("A6:C6").Value = Array("평가기준일 전 개월수", 6, "상증령 §49④ : 평가기준일 전 6개월")
-        ws.Range("A7:C7").Value = Array("평가기준일 후 개월수", 0, "상속 6 / 증여 3 (신고일까지만 해당), 기본 0")
+        ws.Range("A7:C7").Value = Array("평가기준일 후 개월수", 3, "평가구분이 '직접'일 때만 적용")
         ws.Range("A8:C8").Value = Array("공동주택가격 공시월", 4, "공시일 이전 평가기준일은 직전연도 가격 적용")
         ws.Range("A9:C9").Value = Array("공동주택가격 공시일", 30, "연도별 실제 공시일 확인 필요")
         ws.Range("A10:C10").Value = Array("유사재산 허용비율", 0.05, "면적·공시가격 차이 5% (상증칙 §15③)")
         ws.Range("A11:C11").Value = Array("실거래 API URL", URL_RTMS_DEFAULT, "엔드포인트 변경 시 수정")
+        ws.Range("A12:C12").Value = Array("평가구분", "증여", "증여(전6·후3) / 상속(전6·후6) / 직접(B6·B7 적용)")
         ws.Range("A1:C1").Font.Bold = True
         ws.Columns("A:C").AutoFit
         MsgBox "[" & SHT_CFG & "] 시트를 생성했습니다. 인증키를 입력한 후 다시 실행하십시오.", vbInformation
@@ -568,6 +574,15 @@ Private Function LoadConfig() As Boolean
         If .PubMonth < 1 Or .PubMonth > 12 Then .PubMonth = 4
         If .PubDay < 1 Or .PubDay > 31 Then .PubDay = 30
         If .RateTol <= 0 Then .RateTol = 0.05
+
+        ' 평가구분 (기존 설정 시트에 항목이 없으면 '증여'로 추가)
+        If Trim$(CStr(ws.Range("B12").Value)) = "" Then
+            ws.Range("A12:C12").Value = Array("평가구분", "증여", "증여(전6·후3) / 상속(전6·후6) / 직접(B6·B7 적용)")
+        End If
+        Select Case Trim$(CStr(ws.Range("B12").Value))
+            Case "증여": .MonthsBefore = 6: .MonthsAfter = 3
+            Case "상속": .MonthsBefore = 6: .MonthsAfter = 6
+        End Select
 
         If .JusoKey = "" Or .RtmsKey = "" Or .VwKey = "" Then
             MsgBox "[" & SHT_CFG & "] 시트 B2:B4에 인증키를 입력하십시오.", vbExclamation
