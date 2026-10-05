@@ -1,0 +1,144 @@
+﻿'==============================================================================
+' VWorld 공동주택가격 : PNU·기준연도 단위로 단지 전체 세대 조회 (캐시)
+'==============================================================================
+Private Function GetComplexUnits(ByVal pnu As String, ByVal yr As Long, ByRef msg As String) As Collection
+    Dim key As String, col As Collection, dom As Object, nodes As Object, n As Object
+    Dim pageNo As Long, url As String, rec(0 To 4) As Variant, hoTxt As String, flTxt As String
+
+    key = pnu & "|" & yr
+    If gUnitCache.Exists(key) Then
+        Set GetComplexUnits = gUnitCache(key)
+        Exit Function
+    End If
+
+    Set col = New Collection
+    pageNo = 1
+    Do
+        url = URL_VWORLD & "?key=" & cfg.VwKey & "&domain=" & cfg.VwDomain & "&pnu=" & pnu & _
+              "&stdrYear=" & yr & "&format=xml&numOfRows=1000&pageNo=" & pageNo
+        Set dom = HttpGetXml(url, msg)
+        If dom Is Nothing Then Exit Do
+        Set nodes = dom.selectNodes("//*[pblntfPc]")
+        If nodes.Length = 0 Then
+            If pageNo = 1 Then msg = "VWorld 응답: " & Left$(dom.XML, 200)
+            Exit Do
+        End If
+        For Each n In nodes
+            hoTxt = NodeText(n, "hoNm")
+            flTxt = NumOnly(NodeText(n, "floorNm"))
+            rec(0) = NormDH(NodeText(n, "dongNm"))
+            rec(1) = NormDH(hoTxt)
+            ' 층 정보가 없으면 호수에서 추정 (1906호 → 19층)
+            If Len(flTxt) > 0 Then rec(2) = CLng(flTxt) Else rec(2) = CLng(Val(NumOnly(hoTxt)) \ 100)
+            rec(3) = Val(NodeText(n, "prvuseAr"))
+            rec(4) = Val(Replace(NodeText(n, "pblntfPc"), ",", ""))
+            col.Add rec
+        Next n
+        If nodes.Length < 1000 Then Exit Do
+        pageNo = pageNo + 1
+    Loop
+
+    If col.Count > 0 Then gUnitCache.Add key, col
+    Set GetComplexUnits = col
+End Function
+
+Private Function FindUnit(units As Collection, ByVal dongIn As String, ByVal hoIn As String) As Variant
+    Dim u As Variant, dN As String, hN As String
+    dN = NormDH(dongIn): hN = NormDH(hoIn)
+    For Each u In units
+        If u(0) = dN And u(1) = hN Then
+            FindUnit = u
+            Exit Function
+        End If
+    Next u
+End Function
+
+' 비교대상 거래의 공동주택가격 : 동·층·면적이 같은 세대 공시가격 평균 (호 미공개)
+Private Function AvgPubPrice(units As Collection, t As Variant) As Double
+    Dim u As Variant, s As Double, k As Long
+    For Each u In units
+        If u(2) = t(3) And Abs(u(3) - t(4)) <= AREA_TOL Then
+            If Len(t(2)) = 0 Or u(0) = t(2) Then
+                s = s + u(4): k = k + 1
+            End If
+        End If
+    Next u
+    If k > 0 Then AvgPubPrice = s / k
+End Function
+
+Private Function IsSameUnit(t As Variant, subj As Variant) As Boolean
+    ' 실거래자료에 동 정보가 없는 거래는 동일 호로 보지 않음
+    IsSameUnit = (Len(t(2)) > 0 And t(2) = subj(0) And t(3) = subj(2) And Abs(t(4) - subj(3)) <= AREA_TOL)
+End Function
+
+'==============================================================================
+' 국토부 아파트 매매 실거래가 : 기간 내 해당 단지 거래 (해제거래 제외)
+'==============================================================================
+Private Function GetComplexTrades(ByVal lawd As String, ByVal umd As String, ByVal jibunKey As String, _
+                                  ByVal bdNm As String, ByVal dtFrom As Date, ByVal dtTo As Date, _
+                                  ByRef msg As String) As Collection
+    Dim res As Collection, mon As Collection, t As Variant, d As Date, bdN As String
+
+    Set res = New Collection
+    bdN = NormName(bdNm)
+    d = DateSerial(Year(dtFrom), Month(dtFrom), 1)
+    Do While d <= dtTo And d <= Date
+        Set mon = GetMonthTrades(lawd, Format$(d, "yyyymm"), msg)
+        For Each t In mon
+            If t(0) >= dtFrom And t(0) <= dtTo Then
+                If t(6) = umd And (t(7) = jibunKey Or (Len(bdN) > 0 And NormName(t(1)) = bdN)) Then
+                    res.Add t
+                End If
+            End If
+        Next t
+        d = DateAdd("m", 1, d)
+    Loop
+    Set GetComplexTrades = res
+End Function
+
+Private Function GetMonthTrades(ByVal lawd As String, ByVal ym As String, ByRef msg As String) As Collection
+    Dim key As String, col As Collection, dom As Object, nodes As Object, n As Object
+    Dim pageNo As Long, url As String, code As String, rec(0 To 7) As Variant, ok As Boolean
+
+    key = lawd & "|" & ym
+    If gTradeCache.Exists(key) Then
+        Set GetMonthTrades = gTradeCache(key)
+        Exit Function
+    End If
+
+    Set col = New Collection
+    ok = True
+    pageNo = 1
+    Do
+        url = cfg.RtmsUrl & "?serviceKey=" & cfg.RtmsKey & "&LAWD_CD=" & lawd & "&DEAL_YMD=" & ym & _
+              "&pageNo=" & pageNo & "&numOfRows=1000"
+        Set dom = HttpGetXml(url, msg)
+        If dom Is Nothing Then ok = False: Exit Do
+        code = NodeText(dom, "//resultCode")
+        If code <> "" And code <> "00" And code <> "000" Then
+            msg = "실거래API(" & ym & "): " & code & " " & NodeText(dom, "//resultMsg")
+            ok = False: Exit Do
+        End If
+        Set nodes = dom.selectNodes("//item")
+        For Each n In nodes
+            ' 해제(취소) 거래 제외
+            If UCase$(Trim$(NodeText(n, "cdealType"))) <> "O" Then
+                rec(0) = DateSerial(Val(NodeText(n, "dealYear")), Val(NodeText(n, "dealMonth")), Val(NodeText(n, "dealDay")))
+                rec(1) = NodeText(n, "aptNm")
+                rec(2) = NormDH(NodeText(n, "aptDong"))
+                rec(3) = CLng(Val(NodeText(n, "floor")))
+                rec(4) = Val(NodeText(n, "excluUseAr"))
+                rec(5) = Val(Replace(NodeText(n, "dealAmount"), ",", "")) * 10000#   ' 만원 → 원
+                rec(6) = Trim$(NodeText(n, "umdCd"))
+                rec(7) = Trim$(NodeText(n, "jibun"))
+                col.Add rec
+            End If
+        Next n
+        If nodes.Length < 1000 Then Exit Do
+        pageNo = pageNo + 1
+    Loop
+
+    If ok Then gTradeCache.Add key, col     ' 오류 응답은 캐시하지 않음
+    Set GetMonthTrades = col
+End Function
+' ----- 아파트가격 3/4 끝 -----

@@ -1,0 +1,229 @@
+﻿'==============================================================================
+' 공통 유틸
+'==============================================================================
+Private Function HttpGetXml(ByVal url As String, ByRef msg As String) As Object
+    Dim http As Object, dom As Object
+    On Error GoTo EH
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 5000, 10000, 30000, 60000
+    http.Open "GET", url, False
+    http.send
+    If http.Status <> 200 Then
+        msg = "HTTP " & http.Status & " " & Left$(url, InStr(url & "?", "?") - 1)
+        Exit Function
+    End If
+    Set dom = CreateObject("MSXML2.DOMDocument.6.0")
+    dom.async = False
+    dom.SetProperty "SelectionLanguage", "XPath"
+    If Not dom.Load(http.responseBody) Then
+        msg = "XML 해석 실패: " & Left$(http.responseText, 200)
+        Exit Function
+    End If
+    Set HttpGetXml = dom
+    Exit Function
+EH:
+    msg = "통신오류: " & Err.Description
+End Function
+
+Private Function NodeText(ByVal parent As Object, ByVal xp As String) As String
+    Dim n As Object
+    Set n = parent.selectSingleNode(xp)
+    If Not n Is Nothing Then NodeText = Trim$(n.Text)
+End Function
+
+' 동·호 정규화 : "제105동" → "105", "1906호" → "1906", "A동" → "A"
+Private Function NormDH(ByVal s As String) As String
+    s = UCase$(Replace(Trim$(s), " ", ""))
+    If Left$(s, 1) = "제" Then s = Mid$(s, 2)
+    If Right$(s, 1) = "동" Or Right$(s, 1) = "호" Then s = Left$(s, Len(s) - 1)
+    If Len(s) > 0 And s Like String$(Len(s), "#") Then s = CStr(CLng(s))
+    NormDH = s
+End Function
+
+Private Function NormName(ByVal s As String) As String
+    NormName = UCase$(Replace(Replace(Replace(Trim$(s), " ", ""), "(", ""), ")", ""))
+End Function
+
+Private Function NumOnly(ByVal s As String) As String
+    Dim i As Long, ch As String
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "#" Then NumOnly = NumOnly & ch
+    Next i
+End Function
+
+' 평가기준일 현재 공시된 공동주택가격의 기준연도
+Private Function PubYear(ByVal d As Date) As Long
+    If d >= PubDate(Year(d)) Then PubYear = Year(d) Else PubYear = Year(d) - 1
+End Function
+
+' 연도별 공동주택가격 공시일 : 설정 시트 E:F 표 우선, 없으면 기본 월·일
+Private Function PubDate(ByVal yr As Long) As Date
+    If cfg.PubDates.Exists(yr) Then
+        PubDate = cfg.PubDates(yr)
+    Else
+        PubDate = DateSerial(yr, cfg.PubMonth, cfg.PubDay)
+    End If
+End Function
+
+Private Sub PutValue(ByVal c As Range, ByVal v As Double)
+    If v > 0 Then
+        c.Value = v
+        c.NumberFormat = "#,##0"
+        c.HorizontalAlignment = xlRight
+    Else
+        c.Value = "N/A"
+        c.HorizontalAlignment = xlCenter
+    End If
+End Sub
+
+Private Sub WriteAllNA(ws As Worksheet, ByVal r As Long, dateCols As Collection)
+    Dim col As Variant
+    For Each col In dateCols
+        WriteGroupNA ws, r, CLng(col)
+    Next col
+End Sub
+
+' 평가기준일 1개 그룹(6열) 전체 N/A
+Private Sub WriteGroupNA(ws As Worksheet, ByVal r As Long, ByVal col As Long)
+    Dim k As Long
+    For k = 0 To GROUP_W - 1
+        PutValue ws.Cells(r, col + k), 0
+    Next k
+End Sub
+
+Private Sub PutDate(ByVal c As Range, ByVal d As Date)
+    c.Value = d
+    c.NumberFormat = "yyyy-mm-dd"
+    c.HorizontalAlignment = xlCenter
+End Sub
+
+' 실거래가액 없음 표시
+Private Sub PutDash(ByVal c As Range)
+    c.Value = "-"
+    c.HorizontalAlignment = xlCenter
+End Sub
+
+'==============================================================================
+' 설정 시트
+'==============================================================================
+Private Function LoadConfig() As Boolean
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(SHT_CFG)
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = SHT_CFG
+        ws.Range("A1:C1").Value = Array("항목", "값", "비고")
+        ws.Range("A2:C2").Value = Array("도로명주소 API 승인키", "", "business.juso.go.kr 검색API 신청")
+        ws.Range("A3:C3").Value = Array("공공데이터포털 서비스키", "", "data.go.kr '아파트 매매 실거래가 상세 자료' 활용신청, 인코딩(Encoding) 키")
+        ws.Range("A4:C4").Value = Array("VWorld 인증키", "", "vworld.kr 오픈API 인증키 (공동주택가격속성조회)")
+        ws.Range("A5:C5").Value = Array("VWorld 도메인", "", "인증키 발급 시 등록한 서비스 URL")
+        ws.Range("A6:C6").Value = Array("평가기간(전)", "6개월", "증여 기준 고정 (코드 상수)")
+        ws.Range("A7:C7").Value = Array("평가기간(후)", "3개월", "증여 기준 고정 (상속은 6개월)")
+        ws.Range("A8:C8").Value = Array("공동주택가격 공시월", 4, "공시일 이전 평가기준일은 직전연도 가격 적용")
+        ws.Range("A9:C9").Value = Array("공동주택가격 공시일", 30, "연도별 실제 공시일 확인 필요")
+        ws.Range("A10:C10").Value = Array("유사재산 허용비율", 0.05, "면적·공시가격 차이 5% (상증칙 §15③)")
+        ws.Range("A11:C11").Value = Array("실거래 API URL", URL_RTMS_DEFAULT, "엔드포인트 변경 시 수정")
+        ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
+        ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
+        ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
+        ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
+        ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
+        ws.Range("A1:C1,E1:G1").Font.Bold = True
+        ws.Columns("A:G").AutoFit
+        MsgBox "[" & SHT_CFG & "] 시트를 생성했습니다. 인증키를 입력한 후 다시 실행하십시오.", vbInformation
+        Exit Function
+    End If
+
+    With cfg
+        .JusoKey = Trim$(CStr(ws.Range("B2").Value))
+        .RtmsKey = Trim$(CStr(ws.Range("B3").Value))
+        .VwKey = Trim$(CStr(ws.Range("B4").Value))
+        .VwDomain = Trim$(CStr(ws.Range("B5").Value))
+        .MonthsBefore = EVAL_MONTHS_BEFORE
+        .MonthsAfter = EVAL_MONTHS_AFTER
+        .PubMonth = CLng(Val(ws.Range("B8").Value))
+        .PubDay = CLng(Val(ws.Range("B9").Value))
+        .RateTol = CDbl(Val(ws.Range("B10").Value))
+        .RtmsUrl = Trim$(CStr(ws.Range("B11").Value))
+        If .RtmsUrl = "" Then .RtmsUrl = URL_RTMS_DEFAULT
+        If .PubMonth < 1 Or .PubMonth > 12 Then .PubMonth = 4
+        If .PubDay < 1 Or .PubDay > 31 Then .PubDay = 30
+        ' 연도별 공시일 표 (기존 설정 시트에 없으면 추가)
+        If Trim$(CStr(ws.Range("E1").Value)) = "" Then
+            ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
+            ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
+            ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
+            ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
+            ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
+            ws.Range("E1:G1").Font.Bold = True
+        End If
+        Set .PubDates = LoadPubDates(ws)
+        If .RateTol <= 0 Then .RateTol = 0.05
+
+        If .JusoKey = "" Or .RtmsKey = "" Or .VwKey = "" Then
+            MsgBox "[" & SHT_CFG & "] 시트 B2:B4에 인증키를 입력하십시오.", vbExclamation
+            Exit Function
+        End If
+    End With
+    LoadConfig = True
+End Function
+
+' 설정 시트 E:F (연도, 공시일) 표 읽기
+Private Function LoadPubDates(ws As Worksheet) As Object
+    Dim d As Object, r As Long
+    Set d = CreateObject("Scripting.Dictionary")
+    r = 2
+    Do While Len(Trim$(CStr(ws.Cells(r, 5).Value))) > 0
+        If IsNumeric(ws.Cells(r, 5).Value) And IsDate(ws.Cells(r, 6).Value) Then
+            d(CLng(ws.Cells(r, 5).Value)) = CDate(ws.Cells(r, 6).Value)
+        End If
+        r = r + 1
+    Loop
+    Set LoadPubDates = d
+End Function
+
+'==============================================================================
+' 조회로그 시트 (감사증거용 근거 기록)
+'==============================================================================
+Private Sub InitLog()
+    On Error Resume Next
+    Set wsLog = ThisWorkbook.Worksheets(SHT_LOG)
+    On Error GoTo 0
+    If wsLog Is Nothing Then
+        Set wsLog = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        wsLog.Name = SHT_LOG
+    End If
+    wsLog.Cells.Clear
+    wsLog.Range("A1:L1").Value = Array("행", "입력", "평가기준일", "구분", "내용", "계약일", _
+                                       "동", "층", "전용면적(㎡)", "거래금액(원)", "공동주택가격(원)", "공시가격 차이율")
+    wsLog.Range("A1:L1").Font.Bold = True
+    wsLog.Range("A1:L1").HorizontalAlignment = xlCenter
+    gLogRow = 2
+End Sub
+
+Private Sub AddLog(ByVal r As Long, ByVal sInput As String, ByVal evalDate As Variant, ByVal kind As String, _
+                   ByVal note As String, Optional ByVal dealDate As Variant, Optional ByVal dong As Variant, _
+                   Optional ByVal fl As Variant, Optional ByVal area As Variant, Optional ByVal amt As Variant, _
+                   Optional ByVal pub As Variant, Optional ByVal rate As Variant)
+    With wsLog
+        .Cells(gLogRow, 1).Value = r
+        .Cells(gLogRow, 2).Value = sInput
+        If IsDate(evalDate) Then .Cells(gLogRow, 3).Value = CDate(evalDate): .Cells(gLogRow, 3).NumberFormat = "yyyy-mm-dd"
+        .Cells(gLogRow, 4).Value = kind
+        .Cells(gLogRow, 5).Value = note
+        If Not IsMissing(dealDate) Then .Cells(gLogRow, 6).Value = dealDate: .Cells(gLogRow, 6).NumberFormat = "yyyy-mm-dd"
+        If Not IsMissing(dong) Then .Cells(gLogRow, 7).Value = "'" & dong
+        If Not IsMissing(fl) Then .Cells(gLogRow, 8).Value = fl
+        If Not IsMissing(area) Then .Cells(gLogRow, 9).Value = area: .Cells(gLogRow, 9).NumberFormat = "0.00"
+        If Not IsMissing(amt) Then .Cells(gLogRow, 10).Value = amt: .Cells(gLogRow, 10).NumberFormat = "#,##0"
+        If Not IsMissing(pub) Then .Cells(gLogRow, 11).Value = pub: .Cells(gLogRow, 11).NumberFormat = "#,##0"
+        If Not IsMissing(rate) Then .Cells(gLogRow, 12).Value = rate: .Cells(gLogRow, 12).NumberFormat = "0.00%"
+    End With
+    gLogRow = gLogRow + 1
+End Sub
+' ----- 아파트가격 4/4 끝 -----

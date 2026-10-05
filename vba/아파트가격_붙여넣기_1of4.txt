@@ -1,0 +1,130 @@
+﻿'==============================================================================
+' 아파트 가격 조회 (기준시가 / 유사매매사례가액(추정) / 실거래가액)
+'------------------------------------------------------------------------------
+' [입력 시트 구조]
+'   A5:A~ : 소재지 (예: "대구 수성구 상록로 69, 래미안범어, 105동 1906호")
+'   2행   : 평가기준일 (B2, H2, N2 ... 6열 단위, 병합셀의 첫 셀에 날짜)
+'   3행   : 기준시가 / 매매사례액 / 실거래가액 (각 2열)
+'   4행   : 공시일·금액 / 고시일자·금액 / 매매계약일·금액
+'           → 미조회 시 "N/A", 실거래가액이 없으면 "-"
+'
+' [사용 API] - 모두 무료, 개별 인증키 필요 ("아파트_설정" 시트에 입력)
+'   1) 행정안전부 도로명주소 검색 API (business.juso.go.kr) : 주소 → PNU·법정동코드
+'   2) 국토교통부 공동주택가격 속성조회 (VWorld)           : 동·호별 공동주택가격
+'   3) 국토교통부 아파트 매매 실거래가 상세 (data.go.kr)    : 실거래·유사매매사례
+'
+' [판단 기준]
+'   - 기준시가 : 상증세법 제61조 제1항 제4호 → 평가기준일 현재 공시된 공동주택가격
+'                (공시일 이전 평가기준일은 직전 연도 가격 적용, 공시일은 설정 시트)
+'   - 실거래가액 : 동·층·전용면적이 평가대상과 일치하는 거래(호수는 미공개 → 추정)
+'   - 매매사례가액 : 상증세법 시행령 제49조 제4항, 시행규칙 제15조 제3항 준용 추정
+'                홈택스 "평가기간 내 유사 물건"과 동일 범위(증여 전6·후3 / 상속 전6·후6)
+'                동일 단지 + 전용면적 차이 5% 이내 + 공동주택가격 차이 5% 이내,
+'                공동주택가격 차이 최소 → 동률 시 평가기준일에 가장 가까운 거래
+'                ※ 홈택스 조회값과 다를 수 있음(호 단위 공시가격 매칭 불가)
+'==============================================================================
+Option Explicit
+
+Private Const SHT_CFG As String = "아파트_설정"
+Private Const SHT_LOG As String = "아파트_조회로그"
+Private Const SHT_APT As String = "아파트"         ' 조회 양식 시트명
+Private Const FIRST_ROW As Long = 5
+Private Const HDR_DATE_ROW As Long = 2
+Private Const FIRST_COL As Long = 2
+Private Const GROUP_W As Long = 6           ' 평가기준일 1개당 열 수
+Private Const AREA_TOL As Double = 0.1       ' 동일 호 판정 시 전용면적 허용오차(㎡)
+' 평가기간 : 증여 기준 고정 (평가기준일 전 6개월 ~ 후 3개월, 상증세법 제60조 제1항)
+'   ※ 상속이면 전 6개월 ~ 후 6개월 → 평가기준일 후 3~6개월 거래가 추가로 포함되어 결과가 달라질 수 있음
+Private Const EVAL_MONTHS_BEFORE As Long = 6
+Private Const EVAL_MONTHS_AFTER As Long = 3
+
+Private Const URL_JUSO As String = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
+Private Const URL_VWORLD As String = "https://api.vworld.kr/ned/data/getApartHousingPriceAttr"
+Private Const URL_RTMS_DEFAULT As String = _
+    "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev"
+
+Private Type Config
+    JusoKey As String
+    RtmsKey As String
+    VwKey As String
+    VwDomain As String
+    RtmsUrl As String
+    MonthsBefore As Long
+    MonthsAfter As Long
+    PubMonth As Long
+    PubDay As Long
+    PubDates As Object                     ' 연도 → 실제 공시일 (설정 시트 E:F)
+    RateTol As Double
+End Type
+
+' 단지 세대 레코드 : 0 동(정규화) / 1 호(정규화) / 2 층 / 3 전용면적 / 4 공동주택가격
+' 거래 레코드     : 0 계약일 / 1 단지명 / 2 동(정규화) / 3 층 / 4 전용면적 / 5 거래금액(원)
+'                   6 법정동코드(읍면동 5자리) / 7 지번
+Private cfg As Config
+Private gUnitCache As Object
+Private gTradeCache As Object
+Private wsLog As Worksheet
+Private gLogRow As Long
+
+'==============================================================================
+' 메인 실행 : [아파트] 시트에 결과 기록 (시트가 없으면 현재 활성 시트)
+'==============================================================================
+Public Sub 아파트가격조회()
+    Dim ws As Worksheet
+    Dim dateCols As Collection
+    Dim col As Long, lastRow As Long, r As Long
+    Dim sInput As String
+
+    If Not LoadConfig() Then Exit Sub
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(SHT_APT)
+    On Error GoTo 0
+    If ws Is Nothing Then Set ws = ActiveSheet
+    If ws.Name = SHT_CFG Or ws.Name = SHT_LOG Then
+        MsgBox "조회 시트를 선택한 후 실행하십시오.", vbExclamation
+        Exit Sub
+    End If
+
+    ' 평가기준일 열 수집 (2행, 6열 간격)
+    Set dateCols = New Collection
+    col = FIRST_COL
+    Do While Len(Trim$(CStr(ws.Cells(HDR_DATE_ROW, col).Value))) > 0
+        If IsDate(ws.Cells(HDR_DATE_ROW, col).Value) Then dateCols.Add col
+        col = col + GROUP_W
+    Loop
+    If dateCols.Count = 0 Then
+        MsgBox "2행에 평가기준일이 없습니다.", vbExclamation
+        Exit Sub
+    End If
+
+    Set gUnitCache = CreateObject("Scripting.Dictionary")
+    Set gTradeCache = CreateObject("Scripting.Dictionary")
+    InitLog
+
+    Application.ScreenUpdating = False
+    Application.Cursor = xlWait
+    On Error GoTo EH
+
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    For r = FIRST_ROW To lastRow
+        sInput = Trim$(CStr(ws.Cells(r, 1).Value))
+        If Len(sInput) > 0 Then
+            Application.StatusBar = "조회 중: " & r & "행 / " & sInput
+            ProcessRow ws, r, sInput, dateCols         ' A열이 빈 행은 조회하지 않음
+            DoEvents
+        End If
+    Next r
+
+Finish:
+    Application.StatusBar = False
+    Application.Cursor = xlDefault
+    Application.ScreenUpdating = True
+    wsLog.Columns("A:L").AutoFit
+    MsgBox "조회 완료. 세부 근거는 [" & SHT_LOG & "] 시트를 확인하십시오.", vbInformation
+    Exit Sub
+EH:
+    MsgBox "오류(" & r & "행): " & Err.Description, vbCritical
+    Resume Finish
+End Sub
+' ----- 아파트가격 1/4 끝 -----
