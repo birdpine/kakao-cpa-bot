@@ -28,8 +28,10 @@ Option Explicit
 Private Const SHT_CFG As String = "아파트_설정"
 Private Const SHT_LOG As String = "아파트_조회로그"
 Private Const SHT_APT As String = "아파트"         ' 조회 양식 시트명
-Private Const FIRST_ROW As Long = 5
-Private Const HDR_DATE_ROW As Long = 2
+' 머리글 위치는 실행 시 자동 인식 (A열 "소재지" 셀 = 평가기준일 행, B열 "공시일" 다음 행 = 데이터 시작)
+'   인식 실패 시 아래 기본값 사용
+Private Const FIRST_ROW_DEFAULT As Long = 5
+Private Const HDR_DATE_ROW_DEFAULT As Long = 2
 Private Const FIRST_COL As Long = 2
 Private Const GROUP_W As Long = 6           ' 평가기준일 1개당 열 수
 Private Const AREA_TOL As Double = 0.1       ' 동일 호 판정 시 전용면적 허용오차(㎡)
@@ -65,6 +67,8 @@ Private gUnitCache As Object
 Private gTradeCache As Object
 Private wsLog As Worksheet
 Private gLogRow As Long
+Private HDR_DATE_ROW As Long
+Private FIRST_ROW As Long
 
 '==============================================================================
 ' 메인 실행 : [아파트] 시트에 결과 기록 (시트가 없으면 현재 활성 시트)
@@ -86,7 +90,10 @@ Public Sub 아파트가격조회()
         Exit Sub
     End If
 
-    ' 평가기준일 열 수집 (2행, 6열 간격)
+    ' 머리글 위치 자동 인식 (행 삽입·삭제 대응)
+    DetectLayout ws
+
+    ' 평가기준일 열 수집 (평가기준일 행, 6열 간격)
     Set dateCols = New Collection
     col = FIRST_COL
     Do While Len(Trim$(CStr(ws.Cells(HDR_DATE_ROW, col).Value))) > 0
@@ -94,7 +101,7 @@ Public Sub 아파트가격조회()
         col = col + GROUP_W
     Loop
     If dateCols.Count = 0 Then
-        MsgBox "2행에 평가기준일이 없습니다.", vbExclamation
+        MsgBox HDR_DATE_ROW & "행에 평가기준일이 없습니다. (A열 '소재지' 셀과 같은 행에 날짜 입력)", vbExclamation
         Exit Sub
     End If
 
@@ -126,6 +133,28 @@ Finish:
 EH:
     MsgBox "오류(" & r & "행): " & Err.Description, vbCritical
     Resume Finish
+End Sub
+
+' 머리글 위치 인식 : A열에서 "소재지" 셀을 찾아 그 행 = 평가기준일 행,
+'                   그 아래 B열 "공시일" 행 다음 행 = 데이터 시작 행
+Private Sub DetectLayout(ws As Worksheet)
+    Dim r As Long, r2 As Long
+
+    HDR_DATE_ROW = HDR_DATE_ROW_DEFAULT
+    FIRST_ROW = FIRST_ROW_DEFAULT
+    For r = 1 To 30
+        If Replace(CStr(ws.Cells(r, 1).Value), " ", "") = "소재지" Then
+            HDR_DATE_ROW = r
+            FIRST_ROW = r + 3
+            For r2 = r To r + 5
+                If Replace(CStr(ws.Cells(r2, FIRST_COL).Value), " ", "") = "공시일" Then
+                    FIRST_ROW = r2 + 1
+                    Exit For
+                End If
+            Next r2
+            Exit For
+        End If
+    Next r
 End Sub
 
 '------------------------------------------------------------------------------
@@ -726,4 +755,4 @@ Private Sub AddLog(ByVal r As Long, ByVal sInput As String, ByVal evalDate As Va
     End With
     gLogRow = gLogRow + 1
 End Sub
-' ===== 아파트가격 코드 끝 (총 729줄) =====
+' ===== 아파트가격 코드 끝 (총 758줄) =====
