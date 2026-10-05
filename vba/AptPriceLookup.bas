@@ -3,9 +3,11 @@ Attribute VB_Name = "AptPriceLookup"
 ' 아파트 가격 조회 (기준시가 / 유사매매사례가액(추정) / 실거래가액)
 '------------------------------------------------------------------------------
 ' [입력 시트 구조]
-'   A4:A~ : 소재지 (예: "대구 수성구 상록로 69, 래미안범어, 105동 1906호")
-'   2행   : 평가기준일 (B2, E2, H2 ... 3열 단위, 병합셀의 첫 셀에 날짜)
-'   3행   : 기준시가 / 매매사례액 / 실거래가액
+'   A5:A~ : 소재지 (예: "대구 수성구 상록로 69, 래미안범어, 105동 1906호")
+'   2행   : 평가기준일 (B2, H2, N2 ... 6열 단위, 병합셀의 첫 셀에 날짜)
+'   3행   : 기준시가 / 매매사례액 / 실거래가액 (각 2열)
+'   4행   : 공시일·금액 / 고시일자·금액 / 매매계약일·금액
+'           → 미조회 시 "N/A", 실거래가액이 없으면 "-"
 '
 ' [사용 API] - 모두 무료, 개별 인증키 필요 ("설정" 시트에 입력)
 '   1) 행정안전부 도로명주소 검색 API (business.juso.go.kr) : 주소 → PNU·법정동코드
@@ -26,9 +28,10 @@ Option Explicit
 
 Private Const SHT_CFG As String = "설정"
 Private Const SHT_LOG As String = "조회로그"
-Private Const FIRST_ROW As Long = 4
+Private Const FIRST_ROW As Long = 5
 Private Const HDR_DATE_ROW As Long = 2
 Private Const FIRST_COL As Long = 2
+Private Const GROUP_W As Long = 6           ' 평가기준일 1개당 열 수
 Private Const AREA_TOL As Double = 0.1       ' 동일 호 판정 시 전용면적 허용오차(㎡)
 
 Private Const URL_JUSO As String = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
@@ -46,6 +49,7 @@ Private Type Config
     MonthsAfter As Long
     PubMonth As Long
     PubDay As Long
+    PubDates As Object                     ' 연도 → 실제 공시일 (설정 시트 E:F)
     RateTol As Double
 End Type
 
@@ -80,7 +84,7 @@ Public Sub AptPriceLookup()
     col = FIRST_COL
     Do While Len(Trim$(CStr(ws.Cells(HDR_DATE_ROW, col).Value))) > 0
         If IsDate(ws.Cells(HDR_DATE_ROW, col).Value) Then dateCols.Add col
-        col = col + 3
+        col = col + GROUP_W
     Loop
     If dateCols.Count = 0 Then
         MsgBox "2행에 평가기준일이 없습니다.", vbExclamation
@@ -157,7 +161,10 @@ Private Sub ProcessRow(ws As Worksheet, ByVal r As Long, ByVal sInput As String,
 End Sub
 
 '------------------------------------------------------------------------------
-' 평가기준일 1개 처리 : col = 기준시가, col+1 = 매매사례가액, col+2 = 실거래가액
+' 평가기준일 1개 처리
+'   col   : 공시일      col+1 : 기준시가
+'   col+2 : 고시일자    col+3 : 매매사례가액
+'   col+4 : 매매계약일  col+5 : 실거래가액
 '------------------------------------------------------------------------------
 Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByVal evalDate As Date, _
                         ByVal sInput As String, ByVal pnu As String, ByVal lawd As String, _
@@ -176,14 +183,13 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     Set units = GetComplexUnits(pnu, yr, msg)
     subj = FindUnit(units, dongIn, hoIn)
     If IsEmpty(subj) Then
-        PutValue ws.Cells(r, col), 0
-        PutValue ws.Cells(r, col + 1), 0
-        PutValue ws.Cells(r, col + 2), 0
+        WriteGroupNA ws, r, col
         AddLog r, sInput, evalDate, "기준시가", yr & "년 공동주택가격에서 해당 동·호 미검색 " & _
                "(단지 PNU 상이 가능) " & msg
         Exit Sub
     End If
-    PutValue ws.Cells(r, col), CDbl(subj(4))
+    PutDate ws.Cells(r, col), PubDate(yr)
+    PutValue ws.Cells(r, col + 1), CDbl(subj(4))
     AddLog r, sInput, evalDate, "기준시가", yr & "년 공동주택가격", , subj(0), subj(2), subj(3), , subj(4)
 
     '--- 2) 거래자료 : 평가기간(상증세법 제60조 제1항, 시행령 제49조 제1항)
@@ -205,9 +211,11 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
         End If
     Next t
     If IsEmpty(bestOwn) Then
-        PutValue ws.Cells(r, col + 2), 0
+        PutDash ws.Cells(r, col + 4)
+        PutDash ws.Cells(r, col + 5)
     Else
-        PutValue ws.Cells(r, col + 2), CDbl(bestOwn(5))
+        PutDate ws.Cells(r, col + 4), CDate(bestOwn(0))
+        PutValue ws.Cells(r, col + 5), CDbl(bestOwn(5))
         AddLog r, sInput, evalDate, "실거래(채택)", "평가기준일 최근접", bestOwn(0), bestOwn(2), bestOwn(3), bestOwn(4), bestOwn(5)
     End If
 
@@ -237,9 +245,12 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
         End If
     Next t
     If IsEmpty(bestSim) Then
-        PutValue ws.Cells(r, col + 1), 0
+        PutValue ws.Cells(r, col + 2), 0
+        PutValue ws.Cells(r, col + 3), 0
     Else
-        PutValue ws.Cells(r, col + 1), CDbl(bestSim(5))
+        ' 고시일자 : 비교에 사용한 공동주택가격의 고시일 (홈택스 화면의 '고시일자')
+        PutDate ws.Cells(r, col + 2), PubDate(yr)
+        PutValue ws.Cells(r, col + 3), CDbl(bestSim(5))
         AddLog r, sInput, evalDate, "유사사례(채택)", "공시가격 차이 최소", bestSim(0), bestSim(2), _
                bestSim(3), bestSim(4), bestSim(5), , bestDiff
     End If
@@ -505,7 +516,16 @@ End Function
 
 ' 평가기준일 현재 공시된 공동주택가격의 기준연도
 Private Function PubYear(ByVal d As Date) As Long
-    If d >= DateSerial(Year(d), cfg.PubMonth, cfg.PubDay) Then PubYear = Year(d) Else PubYear = Year(d) - 1
+    If d >= PubDate(Year(d)) Then PubYear = Year(d) Else PubYear = Year(d) - 1
+End Function
+
+' 연도별 공동주택가격 공시일 : 설정 시트 E:F 표 우선, 없으면 기본 월·일
+Private Function PubDate(ByVal yr As Long) As Date
+    If cfg.PubDates.Exists(yr) Then
+        PubDate = cfg.PubDates(yr)
+    Else
+        PubDate = DateSerial(yr, cfg.PubMonth, cfg.PubDay)
+    End If
 End Function
 
 Private Sub PutValue(ByVal c As Range, ByVal v As Double)
@@ -520,12 +540,30 @@ Private Sub PutValue(ByVal c As Range, ByVal v As Double)
 End Sub
 
 Private Sub WriteAllNA(ws As Worksheet, ByVal r As Long, dateCols As Collection)
-    Dim col As Variant, k As Long
+    Dim col As Variant
     For Each col In dateCols
-        For k = 0 To 2
-            PutValue ws.Cells(r, CLng(col) + k), 0
-        Next k
+        WriteGroupNA ws, r, CLng(col)
     Next col
+End Sub
+
+' 평가기준일 1개 그룹(6열) 전체 N/A
+Private Sub WriteGroupNA(ws As Worksheet, ByVal r As Long, ByVal col As Long)
+    Dim k As Long
+    For k = 0 To GROUP_W - 1
+        PutValue ws.Cells(r, col + k), 0
+    Next k
+End Sub
+
+Private Sub PutDate(ByVal c As Range, ByVal d As Date)
+    c.Value = d
+    c.NumberFormat = "yyyy-mm-dd"
+    c.HorizontalAlignment = xlCenter
+End Sub
+
+' 실거래가액 없음 표시
+Private Sub PutDash(ByVal c As Range)
+    c.Value = "-"
+    c.HorizontalAlignment = xlCenter
 End Sub
 
 '==============================================================================
@@ -553,8 +591,13 @@ Private Function LoadConfig() As Boolean
         ws.Range("A10:C10").Value = Array("유사재산 허용비율", 0.05, "면적·공시가격 차이 5% (상증칙 §15③)")
         ws.Range("A11:C11").Value = Array("실거래 API URL", URL_RTMS_DEFAULT, "엔드포인트 변경 시 수정")
         ws.Range("A12:C12").Value = Array("평가구분", "증여", "증여(전6·후3) / 상속(전6·후6) / 직접(B6·B7 적용)")
-        ws.Range("A1:C1").Font.Bold = True
-        ws.Columns("A:C").AutoFit
+        ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
+        ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
+        ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
+        ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
+        ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
+        ws.Range("A1:C1,E1:G1").Font.Bold = True
+        ws.Columns("A:G").AutoFit
         MsgBox "[" & SHT_CFG & "] 시트를 생성했습니다. 인증키를 입력한 후 다시 실행하십시오.", vbInformation
         Exit Function
     End If
@@ -573,6 +616,16 @@ Private Function LoadConfig() As Boolean
         If .RtmsUrl = "" Then .RtmsUrl = URL_RTMS_DEFAULT
         If .PubMonth < 1 Or .PubMonth > 12 Then .PubMonth = 4
         If .PubDay < 1 Or .PubDay > 31 Then .PubDay = 30
+        ' 연도별 공시일 표 (기존 설정 시트에 없으면 추가)
+        If Trim$(CStr(ws.Range("E1").Value)) = "" Then
+            ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
+            ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
+            ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
+            ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
+            ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
+            ws.Range("E1:G1").Font.Bold = True
+        End If
+        Set .PubDates = LoadPubDates(ws)
         If .RateTol <= 0 Then .RateTol = 0.05
 
         ' 평가구분 (기존 설정 시트에 항목이 없으면 '증여'로 추가)
@@ -590,6 +643,20 @@ Private Function LoadConfig() As Boolean
         End If
     End With
     LoadConfig = True
+End Function
+
+' 설정 시트 E:F (연도, 공시일) 표 읽기
+Private Function LoadPubDates(ws As Worksheet) As Object
+    Dim d As Object, r As Long
+    Set d = CreateObject("Scripting.Dictionary")
+    r = 2
+    Do While Len(Trim$(CStr(ws.Cells(r, 5).Value))) > 0
+        If IsNumeric(ws.Cells(r, 5).Value) And IsDate(ws.Cells(r, 6).Value) Then
+            d(CLng(ws.Cells(r, 5).Value)) = CDate(ws.Cells(r, 6).Value)
+        End If
+        r = r + 1
+    Loop
+    Set LoadPubDates = d
 End Function
 
 '==============================================================================
