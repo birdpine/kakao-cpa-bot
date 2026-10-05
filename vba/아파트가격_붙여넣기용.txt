@@ -86,7 +86,7 @@ Public Sub 아파트가격조회()
         Exit Sub
     End If
 
-    ' 평가기준일 열 수집 (2행, 3열 간격)
+    ' 평가기준일 열 수집 (2행, 6열 간격)
     Set dateCols = New Collection
     col = FIRST_COL
     Do While Len(Trim$(CStr(ws.Cells(HDR_DATE_ROW, col).Value))) > 0
@@ -695,3 +695,4 @@ Private Sub AddLog(ByVal r As Long, ByVal sInput As String, ByVal evalDate As Va
     End With
     gLogRow = gLogRow + 1
 End Sub
+' ===== 아파트가격 코드 끝 (총 698줄) =====
