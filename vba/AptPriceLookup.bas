@@ -9,7 +9,7 @@ Attribute VB_Name = "AptPriceLookup"
 '   4행   : 공시일·금액 / 고시일자·금액 / 매매계약일·금액
 '           → 미조회 시 "N/A", 실거래가액이 없으면 "-"
 '
-' [사용 API] - 모두 무료, 개별 인증키 필요 ("설정" 시트에 입력)
+' [사용 API] - 모두 무료, 개별 인증키 필요 ("아파트_설정" 시트에 입력)
 '   1) 행정안전부 도로명주소 검색 API (business.juso.go.kr) : 주소 → PNU·법정동코드
 '   2) 국토교통부 공동주택가격 속성조회 (VWorld)           : 동·호별 공동주택가격
 '   3) 국토교통부 아파트 매매 실거래가 상세 (data.go.kr)    : 실거래·유사매매사례
@@ -26,8 +26,8 @@ Attribute VB_Name = "AptPriceLookup"
 '==============================================================================
 Option Explicit
 
-Private Const SHT_CFG As String = "설정"
-Private Const SHT_LOG As String = "조회로그"
+Private Const SHT_CFG As String = "아파트_설정"
+Private Const SHT_LOG As String = "아파트_조회로그"
 Private Const FIRST_ROW As Long = 5
 Private Const HDR_DATE_ROW As Long = 2
 Private Const FIRST_COL As Long = 2
