@@ -43,24 +43,22 @@ Private Const URL_VWORLD As String = "https://api.vworld.kr/ned/data/getApartHou
 Private Const URL_RTMS_DEFAULT As String = _
     "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev"
 
-Private Type Config
-    JusoKey As String
-    RtmsKey As String
-    VwKey As String
-    VwDomain As String
-    RtmsUrl As String
-    MonthsBefore As Long
-    MonthsAfter As Long
-    PubMonth As Long
-    PubDay As Long
-    PubDates As Object                     ' 연도 → 실제 공시일 (설정 시트 E:F)
-    RateTol As Double
-End Type
+' 설정값 (아파트_설정 시트에서 읽음)
+Private cJusoKey As String
+Private cRtmsKey As String
+Private cVwKey As String
+Private cVwDomain As String
+Private cRtmsUrl As String
+Private cMonthsBefore As Long
+Private cMonthsAfter As Long
+Private cPubMonth As Long
+Private cPubDay As Long
+Private cPubDates As Object                  ' 연도 → 실제 공시일 (설정 시트 E:F)
+Private cRateTol As Double
 
 ' 단지 세대 레코드 : 0 동(정규화) / 1 호(정규화) / 2 층 / 3 전용면적 / 4 공동주택가격
 ' 거래 레코드     : 0 계약일 / 1 단지명 / 2 동(정규화) / 3 층 / 4 전용면적 / 5 거래금액(원)
 '                   6 법정동코드(읍면동 5자리) / 7 지번
-Private cfg As Config
 Private gUnitCache As Object
 Private gTradeCache As Object
 Private wsLog As Worksheet
@@ -201,8 +199,8 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
 
     '--- 2) 거래자료 : 평가기간(상증세법 제60조 제1항, 시행령 제49조 제1항)
     '       증여 기준 고정 : 전 6개월 ~ 후 3개월 (상속은 후 6개월 → 미적용)
-    dtFrom = DateAdd("m", -cfg.MonthsBefore, evalDate)
-    dtTo = DateAdd("m", cfg.MonthsAfter, evalDate)
+    dtFrom = DateAdd("m", -cMonthsBefore, evalDate)
+    dtTo = DateAdd("m", cMonthsAfter, evalDate)
     Set trades = GetComplexTrades(lawd, umd, jibunKey, bdNm, dtFrom, dtTo, msg)
     If Len(msg) > 0 Then AddLog r, sInput, evalDate, "실거래API", msg
 
@@ -232,11 +230,11 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     bestDiff = 99
     For Each t In trades
         areaDiff = Abs(t(4) - subj(3)) / subj(3)
-        If areaDiff <= cfg.RateTol Then
+        If areaDiff <= cRateTol Then
             cp = AvgPubPrice(units, t)
             If cp > 0 Then
                 diff = Abs(cp - subj(4)) / subj(4)
-                If diff <= cfg.RateTol Then
+                If diff <= cRateTol Then
                     AddLog r, sInput, evalDate, "유사사례(평가기간 내)", "면적차 " & Format$(areaDiff, "0.00%"), _
                            t(0), t(2), t(3), t(4), t(5), cp, diff
                     If diff < bestDiff - 0.0000001 Then
@@ -301,7 +299,7 @@ End Function
 Private Function JusoLookup(ByVal kw As String, ByRef msg As String) As Object
     Dim dom As Object, n As Object, d As Object, f As Variant, url As String
 
-    url = URL_JUSO & "?confmKey=" & cfg.JusoKey & "&currentPage=1&countPerPage=5&keyword=" & _
+    url = URL_JUSO & "?confmKey=" & cJusoKey & "&currentPage=1&countPerPage=5&keyword=" & _
           Application.WorksheetFunction.EncodeURL(kw)
     Set dom = HttpGetXml(url, msg)
     If dom Is Nothing Then Exit Function
@@ -339,7 +337,7 @@ Private Function GetComplexUnits(ByVal pnu As String, ByVal yr As Long, ByRef ms
     Set col = New Collection
     pageNo = 1
     Do
-        url = URL_VWORLD & "?key=" & cfg.VwKey & "&domain=" & cfg.VwDomain & "&pnu=" & pnu & _
+        url = URL_VWORLD & "?key=" & cVwKey & "&domain=" & cVwDomain & "&pnu=" & pnu & _
               "&stdrYear=" & yr & "&format=xml&numOfRows=1000&pageNo=" & pageNo
         Set dom = HttpGetXml(url, msg)
         If dom Is Nothing Then Exit Do
@@ -435,7 +433,7 @@ Private Function GetMonthTrades(ByVal lawd As String, ByVal ym As String, ByRef 
     ok = True
     pageNo = 1
     Do
-        url = cfg.RtmsUrl & "?serviceKey=" & cfg.RtmsKey & "&LAWD_CD=" & lawd & "&DEAL_YMD=" & ym & _
+        url = cRtmsUrl & "?serviceKey=" & cRtmsKey & "&LAWD_CD=" & lawd & "&DEAL_YMD=" & ym & _
               "&pageNo=" & pageNo & "&numOfRows=1000"
         Set dom = HttpGetXml(url, msg)
         If dom Is Nothing Then ok = False: Exit Do
@@ -528,10 +526,10 @@ End Function
 
 ' 연도별 공동주택가격 공시일 : 설정 시트 E:F 표 우선, 없으면 기본 월·일
 Private Function PubDate(ByVal yr As Long) As Date
-    If cfg.PubDates.Exists(yr) Then
-        PubDate = cfg.PubDates(yr)
+    If cPubDates.Exists(yr) Then
+        PubDate = cPubDates(yr)
     Else
-        PubDate = DateSerial(yr, cfg.PubMonth, cfg.PubDay)
+        PubDate = DateSerial(yr, cPubMonth, cPubDay)
     End If
 End Function
 
@@ -608,37 +606,35 @@ Private Function LoadConfig() As Boolean
         Exit Function
     End If
 
-    With cfg
-        .JusoKey = Trim$(CStr(ws.Range("B2").Value))
-        .RtmsKey = Trim$(CStr(ws.Range("B3").Value))
-        .VwKey = Trim$(CStr(ws.Range("B4").Value))
-        .VwDomain = Trim$(CStr(ws.Range("B5").Value))
-        .MonthsBefore = EVAL_MONTHS_BEFORE
-        .MonthsAfter = EVAL_MONTHS_AFTER
-        .PubMonth = CLng(Val(ws.Range("B8").Value))
-        .PubDay = CLng(Val(ws.Range("B9").Value))
-        .RateTol = CDbl(Val(ws.Range("B10").Value))
-        .RtmsUrl = Trim$(CStr(ws.Range("B11").Value))
-        If .RtmsUrl = "" Then .RtmsUrl = URL_RTMS_DEFAULT
-        If .PubMonth < 1 Or .PubMonth > 12 Then .PubMonth = 4
-        If .PubDay < 1 Or .PubDay > 31 Then .PubDay = 30
-        ' 연도별 공시일 표 (기존 설정 시트에 없으면 추가)
-        If Trim$(CStr(ws.Range("E1").Value)) = "" Then
-            ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
-            ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
-            ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
-            ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
-            ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
-            ws.Range("E1:G1").Font.Bold = True
-        End If
-        Set .PubDates = LoadPubDates(ws)
-        If .RateTol <= 0 Then .RateTol = 0.05
+    cJusoKey = Trim$(CStr(ws.Range("B2").Value))
+    cRtmsKey = Trim$(CStr(ws.Range("B3").Value))
+    cVwKey = Trim$(CStr(ws.Range("B4").Value))
+    cVwDomain = Trim$(CStr(ws.Range("B5").Value))
+    cMonthsBefore = EVAL_MONTHS_BEFORE
+    cMonthsAfter = EVAL_MONTHS_AFTER
+    cPubMonth = CLng(Val(ws.Range("B8").Value))
+    cPubDay = CLng(Val(ws.Range("B9").Value))
+    cRateTol = CDbl(Val(ws.Range("B10").Value))
+    cRtmsUrl = Trim$(CStr(ws.Range("B11").Value))
+    If cRtmsUrl = "" Then cRtmsUrl = URL_RTMS_DEFAULT
+    If cPubMonth < 1 Or cPubMonth > 12 Then cPubMonth = 4
+    If cPubDay < 1 Or cPubDay > 31 Then cPubDay = 30
+    ' 연도별 공시일 표 (기존 설정 시트에 없으면 추가)
+    If Trim$(CStr(ws.Range("E1").Value)) = "" Then
+        ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
+        ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
+        ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
+        ws.Range("E4:G4").Value = Array(2026, DateSerial(2026, 4, 30), "홈택스 고시일자로 확인")
+        ws.Range("F2:F4").NumberFormat = "yyyy-mm-dd"
+        ws.Range("E1:G1").Font.Bold = True
+    End If
+    Set cPubDates = LoadPubDates(ws)
+    If cRateTol <= 0 Then cRateTol = 0.05
 
-        If .JusoKey = "" Or .RtmsKey = "" Or .VwKey = "" Then
-            MsgBox "[" & SHT_CFG & "] 시트 B2:B4에 인증키를 입력하십시오.", vbExclamation
-            Exit Function
-        End If
-    End With
+    If cJusoKey = "" Or cRtmsKey = "" Or cVwKey = "" Then
+        MsgBox "[" & SHT_CFG & "] 시트 B2:B4에 인증키를 입력하십시오.", vbExclamation
+        Exit Function
+    End If
     LoadConfig = True
 End Function
 
@@ -695,4 +691,4 @@ Private Sub AddLog(ByVal r As Long, ByVal sInput As String, ByVal evalDate As Va
     End With
     gLogRow = gLogRow + 1
 End Sub
-' ===== 아파트가격 코드 끝 (총 698줄) =====
+' ===== 아파트가격 코드 끝 (총 694줄) =====
