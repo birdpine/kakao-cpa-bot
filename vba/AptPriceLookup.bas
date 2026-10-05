@@ -33,6 +33,10 @@ Private Const HDR_DATE_ROW As Long = 2
 Private Const FIRST_COL As Long = 2
 Private Const GROUP_W As Long = 6           ' 평가기준일 1개당 열 수
 Private Const AREA_TOL As Double = 0.1       ' 동일 호 판정 시 전용면적 허용오차(㎡)
+' 평가기간 : 증여 기준 고정 (평가기준일 전 6개월 ~ 후 3개월, 상증세법 제60조 제1항)
+'   ※ 상속이면 전 6개월 ~ 후 6개월 → 평가기준일 후 3~6개월 거래가 추가로 포함되어 결과가 달라질 수 있음
+Private Const EVAL_MONTHS_BEFORE As Long = 6
+Private Const EVAL_MONTHS_AFTER As Long = 3
 
 Private Const URL_JUSO As String = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 Private Const URL_VWORLD As String = "https://api.vworld.kr/ned/data/getApartHousingPriceAttr"
@@ -104,7 +108,7 @@ Public Sub AptPriceLookup()
         sInput = Trim$(CStr(ws.Cells(r, 1).Value))
         If Len(sInput) > 0 Then
             Application.StatusBar = "조회 중: " & r & "행 / " & sInput
-            ProcessRow ws, r, sInput, dateCols
+            ProcessRow ws, r, sInput, dateCols         ' A열이 빈 행은 조회하지 않음
             DoEvents
         End If
     Next r
@@ -193,7 +197,7 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     AddLog r, sInput, evalDate, "기준시가", yr & "년 공동주택가격", , subj(0), subj(2), subj(3), , subj(4)
 
     '--- 2) 거래자료 : 평가기간(상증세법 제60조 제1항, 시행령 제49조 제1항)
-    '       상속 = 전 6개월 ~ 후 6개월 / 증여 = 전 6개월 ~ 후 3개월
+    '       증여 기준 고정 : 전 6개월 ~ 후 3개월 (상속은 후 6개월 → 미적용)
     dtFrom = DateAdd("m", -cfg.MonthsBefore, evalDate)
     dtTo = DateAdd("m", cfg.MonthsAfter, evalDate)
     Set trades = GetComplexTrades(lawd, umd, jibunKey, bdNm, dtFrom, dtTo, msg)
@@ -584,13 +588,12 @@ Private Function LoadConfig() As Boolean
         ws.Range("A3:C3").Value = Array("공공데이터포털 서비스키", "", "data.go.kr '아파트 매매 실거래가 상세 자료' 활용신청, 인코딩(Encoding) 키")
         ws.Range("A4:C4").Value = Array("VWorld 인증키", "", "vworld.kr 오픈API 인증키 (공동주택가격속성조회)")
         ws.Range("A5:C5").Value = Array("VWorld 도메인", "", "인증키 발급 시 등록한 서비스 URL")
-        ws.Range("A6:C6").Value = Array("평가기준일 전 개월수", 6, "상증령 §49④ : 평가기준일 전 6개월")
-        ws.Range("A7:C7").Value = Array("평가기준일 후 개월수", 3, "평가구분이 '직접'일 때만 적용")
+        ws.Range("A6:C6").Value = Array("평가기간(전)", "6개월", "증여 기준 고정 (코드 상수)")
+        ws.Range("A7:C7").Value = Array("평가기간(후)", "3개월", "증여 기준 고정 (상속은 6개월)")
         ws.Range("A8:C8").Value = Array("공동주택가격 공시월", 4, "공시일 이전 평가기준일은 직전연도 가격 적용")
         ws.Range("A9:C9").Value = Array("공동주택가격 공시일", 30, "연도별 실제 공시일 확인 필요")
         ws.Range("A10:C10").Value = Array("유사재산 허용비율", 0.05, "면적·공시가격 차이 5% (상증칙 §15③)")
         ws.Range("A11:C11").Value = Array("실거래 API URL", URL_RTMS_DEFAULT, "엔드포인트 변경 시 수정")
-        ws.Range("A12:C12").Value = Array("평가구분", "증여", "증여(전6·후3) / 상속(전6·후6) / 직접(B6·B7 적용)")
         ws.Range("E1:G1").Value = Array("연도", "공동주택가격 공시일", "비고")
         ws.Range("E2:G2").Value = Array(2024, DateSerial(2024, 4, 30), "확인 필요")
         ws.Range("E3:G3").Value = Array(2025, DateSerial(2025, 4, 30), "확인 필요")
@@ -607,8 +610,8 @@ Private Function LoadConfig() As Boolean
         .RtmsKey = Trim$(CStr(ws.Range("B3").Value))
         .VwKey = Trim$(CStr(ws.Range("B4").Value))
         .VwDomain = Trim$(CStr(ws.Range("B5").Value))
-        .MonthsBefore = CLng(Val(ws.Range("B6").Value))
-        .MonthsAfter = CLng(Val(ws.Range("B7").Value))
+        .MonthsBefore = EVAL_MONTHS_BEFORE
+        .MonthsAfter = EVAL_MONTHS_AFTER
         .PubMonth = CLng(Val(ws.Range("B8").Value))
         .PubDay = CLng(Val(ws.Range("B9").Value))
         .RateTol = CDbl(Val(ws.Range("B10").Value))
@@ -627,15 +630,6 @@ Private Function LoadConfig() As Boolean
         End If
         Set .PubDates = LoadPubDates(ws)
         If .RateTol <= 0 Then .RateTol = 0.05
-
-        ' 평가구분 (기존 설정 시트에 항목이 없으면 '증여'로 추가)
-        If Trim$(CStr(ws.Range("B12").Value)) = "" Then
-            ws.Range("A12:C12").Value = Array("평가구분", "증여", "증여(전6·후3) / 상속(전6·후6) / 직접(B6·B7 적용)")
-        End If
-        Select Case Trim$(CStr(ws.Range("B12").Value))
-            Case "증여": .MonthsBefore = 6: .MonthsAfter = 3
-            Case "상속": .MonthsBefore = 6: .MonthsAfter = 6
-        End Select
 
         If .JusoKey = "" Or .RtmsKey = "" Or .VwKey = "" Then
             MsgBox "[" & SHT_CFG & "] 시트 B2:B4에 인증키를 입력하십시오.", vbExclamation
