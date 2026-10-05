@@ -7,7 +7,7 @@ Attribute VB_Name = "아파트가격"
 '   2행   : 평가기준일 (B2, H2, N2 ... 6열 단위, 병합셀의 첫 셀에 날짜)
 '   3행   : 기준시가 / 매매사례액 / 실거래가액 (각 2열)
 '   4행   : 공시일·금액 / 고시일자·금액 / 매매계약일·금액
-'           → 미조회 시 "N/A", 실거래가액이 없으면 "-"
+'           → 미조회 시 "N/A", 실거래가액·매매사례가액이 없으면 "-"
 '
 ' [사용 API] - 모두 무료, 개별 인증키 필요 ("아파트_설정" 시트에 입력)
 '   1) 행정안전부 도로명주소 검색 API (business.juso.go.kr) : 주소 → PNU·법정동코드
@@ -19,7 +19,7 @@ Attribute VB_Name = "아파트가격"
 '                (공시일 이전 평가기준일은 직전 연도 가격 적용, 공시일은 설정 시트)
 '   - 실거래가액 : 동·층·전용면적이 평가대상과 일치하는 거래(호수는 미공개 → 추정)
 '   - 매매사례가액 : 상증세법 시행령 제49조 제4항, 시행규칙 제15조 제3항 준용 추정
-'                홈택스 "평가기간 내 유사 물건"과 동일 범위(증여 전6·후3 / 상속 전6·후6)
+'                홈택스 "평가기간 내 유사 물건" : 증여(전6·후3) 우선, 없으면 상속(전6·후6)
 '                동일 단지 + 전용면적 차이 5% 이내 + 공동주택가격 차이 5% 이내,
 '                공동주택가격 차이 최소 → 동률 시 평가기준일에 가장 가까운 거래
 '                ※ 홈택스 조회값과 다를 수 있음(호 단위 공시가격 매칭 불가)
@@ -34,10 +34,12 @@ Private Const HDR_DATE_ROW As Long = 2
 Private Const FIRST_COL As Long = 2
 Private Const GROUP_W As Long = 6           ' 평가기준일 1개당 열 수
 Private Const AREA_TOL As Double = 0.1       ' 동일 호 판정 시 전용면적 허용오차(㎡)
-' 평가기간 : 증여 기준 고정 (평가기준일 전 6개월 ~ 후 3개월, 상증세법 제60조 제1항)
-'   ※ 상속이면 전 6개월 ~ 후 6개월 → 평가기준일 후 3~6개월 거래가 추가로 포함되어 결과가 달라질 수 있음
+' 평가기간 (상증세법 제60조 제1항) : 평가기준일 전 6개월 ~
+'   매매사례가액 : ① 증여 기준(후 3개월)으로 검색 → 없으면 ② 상속 기준(후 6개월) → 없으면 "-"
+'   실거래가액   : 증여 기준(후 3개월)
 Private Const EVAL_MONTHS_BEFORE As Long = 6
-Private Const EVAL_MONTHS_AFTER As Long = 3
+Private Const EVAL_MONTHS_AFTER As Long = 3          ' 증여
+Private Const EVAL_MONTHS_AFTER_INH As Long = 6      ' 상속
 
 Private Const URL_JUSO As String = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 Private Const URL_VWORLD As String = "https://api.vworld.kr/ned/data/getApartHousingPriceAttr"
@@ -179,9 +181,9 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     Dim yr As Long, msg As String
     Dim units As Collection, trades As Collection
     Dim subj As Variant, t As Variant
-    Dim dtFrom As Date, dtTo As Date
+    Dim dtFrom As Date, dtTo As Date, dtToInh As Date
     Dim bestOwn As Variant, bestSim As Variant
-    Dim cp As Double, diff As Double, bestDiff As Double, areaDiff As Double
+    Dim bestDiff As Double, basis As String
 
     yr = PubYear(evalDate)
 
@@ -198,16 +200,16 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     PutValue ws.Cells(r, col + 1), CDbl(subj(4))
     AddLog r, sInput, evalDate, "기준시가", yr & "년 공동주택가격", , subj(0), subj(2), subj(3), , subj(4)
 
-    '--- 2) 거래자료 : 평가기간(상증세법 제60조 제1항, 시행령 제49조 제1항)
-    '       증여 기준 고정 : 전 6개월 ~ 후 3개월 (상속은 후 6개월 → 미적용)
+    '--- 2) 거래자료 : 평가기준일 전 6개월 ~ 후 6개월(상속 기준)까지 한 번에 수집
     dtFrom = DateAdd("m", -cMonthsBefore, evalDate)
-    dtTo = DateAdd("m", cMonthsAfter, evalDate)
-    Set trades = GetComplexTrades(lawd, umd, jibunKey, bdNm, dtFrom, dtTo, msg)
+    dtTo = DateAdd("m", cMonthsAfter, evalDate)                 ' 증여 기준 종료일
+    dtToInh = DateAdd("m", EVAL_MONTHS_AFTER_INH, evalDate)     ' 상속 기준 종료일
+    Set trades = GetComplexTrades(lawd, umd, jibunKey, bdNm, dtFrom, dtToInh, msg)
     If Len(msg) > 0 Then AddLog r, sInput, evalDate, "실거래API", msg
 
-    '--- 3) 실거래가액 : 동·층·면적 일치, 평가기준일에 가장 가까운 거래
+    '--- 3) 실거래가액 : 증여 평가기간 내 동·층·면적 일치, 평가기준일에 가장 가까운 거래
     For Each t In trades
-        If IsSameUnit(t, subj) Then
+        If t(0) <= dtTo And IsSameUnit(t, subj) Then
             AddLog r, sInput, evalDate, "실거래(후보)", "동·층·면적 일치", t(0), t(2), t(3), t(4), t(5)
             If IsEmpty(bestOwn) Then
                 bestOwn = t
@@ -226,41 +228,64 @@ Private Sub ProcessDate(ws As Worksheet, ByVal r As Long, ByVal col As Long, ByV
     End If
 
     '--- 4) 유사매매사례가액 : 홈택스 "(유사)매매 시가(평가기간 내 유사 물건)" 기준
-    '       평가기간 내 동일 단지 거래 전체(해당 재산 거래 포함)를 후보로 하여
-    '       면적·공동주택가격 차이 5% 이내 → 공시가격 차이 최소 → 평가기준일 최근접
-    bestDiff = 99
-    For Each t In trades
-        areaDiff = Abs(t(4) - subj(3)) / subj(3)
-        If areaDiff <= cRateTol Then
-            cp = AvgPubPrice(units, t)
-            If cp > 0 Then
-                diff = Abs(cp - subj(4)) / subj(4)
-                If diff <= cRateTol Then
-                    AddLog r, sInput, evalDate, "유사사례(평가기간 내)", "면적차 " & Format$(areaDiff, "0.00%"), _
-                           t(0), t(2), t(3), t(4), t(5), cp, diff
-                    If diff < bestDiff - 0.0000001 Then
-                        bestDiff = diff: bestSim = t
-                    ElseIf Abs(diff - bestDiff) <= 0.0000001 Then
-                        If Abs(t(0) - evalDate) < Abs(bestSim(0) - evalDate) Then bestSim = t
-                    End If
-                End If
-            Else
-                AddLog r, sInput, evalDate, "유사사례(제외)", "비교세대 공동주택가격 미매칭", _
-                       t(0), t(2), t(3), t(4), t(5)
-            End If
-        End If
-    Next t
+    '       ① 증여 평가기간(전 6개월 ~ 후 3개월) → ② 없으면 상속 평가기간(전 6개월 ~ 후 6개월) → ③ 없으면 "-"
+    basis = "증여"
+    bestSim = FindSimilar(trades, units, subj, evalDate, dtTo, r, sInput, basis, bestDiff)
     If IsEmpty(bestSim) Then
-        PutValue ws.Cells(r, col + 2), 0
-        PutValue ws.Cells(r, col + 3), 0
+        basis = "상속"
+        AddLog r, sInput, evalDate, "유사사례", "증여 평가기간 내 사례 없음 → 상속 평가기간(후 6개월)으로 재검색"
+        bestSim = FindSimilar(trades, units, subj, evalDate, dtToInh, r, sInput, basis, bestDiff)
+    End If
+
+    ClearNote ws.Cells(r, col + 3)
+    If IsEmpty(bestSim) Then
+        PutDash ws.Cells(r, col + 2)
+        PutDash ws.Cells(r, col + 3)
+        AddLog r, sInput, evalDate, "유사사례", "증여·상속 평가기간 모두 사례 없음 → ""-"" 표시"
     Else
         ' 고시일자 : 비교에 사용한 공동주택가격의 고시일 (홈택스 화면의 '고시일자')
         PutDate ws.Cells(r, col + 2), PubDate(yr)
         PutValue ws.Cells(r, col + 3), CDbl(bestSim(5))
-        AddLog r, sInput, evalDate, "유사사례(채택)", "공시가격 차이 최소", bestSim(0), bestSim(2), _
+        If basis = "상속" Then AddNote ws.Cells(r, col + 3), "상속 평가기간(후 6개월) 기준 사례"
+        AddLog r, sInput, evalDate, "유사사례(채택)", basis & " 기준, 공시가격 차이 최소", bestSim(0), bestSim(2), _
                bestSim(3), bestSim(4), bestSim(5), , bestDiff
     End If
 End Sub
+
+' 평가기간(dtFrom은 수집 시 반영, 종료일 dtEnd) 내 유사매매사례 선택
+'   면적·공동주택가격 차이 5% 이내 → 공시가격 차이 최소 → 동률 시 평가기준일 최근접
+Private Function FindSimilar(trades As Collection, units As Collection, subj As Variant, _
+                             ByVal evalDate As Date, ByVal dtEnd As Date, ByVal r As Long, _
+                             ByVal sInput As String, ByVal basis As String, ByRef bestDiff As Double) As Variant
+    Dim t As Variant, best As Variant
+    Dim cp As Double, diff As Double, areaDiff As Double
+
+    bestDiff = 99
+    For Each t In trades
+        If t(0) <= dtEnd Then
+            areaDiff = Abs(t(4) - subj(3)) / subj(3)
+            If areaDiff <= cRateTol Then
+                cp = AvgPubPrice(units, t)
+                If cp > 0 Then
+                    diff = Abs(cp - subj(4)) / subj(4)
+                    If diff <= cRateTol Then
+                        AddLog r, sInput, evalDate, "유사사례(" & basis & " 후보)", "면적차 " & Format$(areaDiff, "0.00%"), _
+                               t(0), t(2), t(3), t(4), t(5), cp, diff
+                        If diff < bestDiff - 0.0000001 Then
+                            bestDiff = diff: best = t
+                        ElseIf Abs(diff - bestDiff) <= 0.0000001 Then
+                            If Abs(t(0) - evalDate) < Abs(best(0) - evalDate) Then best = t
+                        End If
+                    End If
+                Else
+                    AddLog r, sInput, evalDate, "유사사례(제외)", "비교세대 공동주택가격 미매칭", _
+                           t(0), t(2), t(3), t(4), t(5)
+                End If
+            End If
+        End If
+    Next t
+    FindSimilar = best
+End Function
 
 '==============================================================================
 ' 입력 해석 : "주소, 단지명, 105동 1906호" → 주소키워드 / 전체키워드 / 동 / 호
@@ -566,10 +591,20 @@ Private Sub PutDate(ByVal c As Range, ByVal d As Date)
     c.HorizontalAlignment = xlCenter
 End Sub
 
-' 실거래가액 없음 표시
+' 실거래가액·매매사례가액 없음 표시
 Private Sub PutDash(ByVal c As Range)
     c.Value = "-"
     c.HorizontalAlignment = xlCenter
+End Sub
+
+' 셀 메모 (상속 기준 사례 표시용)
+Private Sub AddNote(ByVal c As Range, ByVal s As String)
+    ClearNote c
+    c.AddComment s
+End Sub
+
+Private Sub ClearNote(ByVal c As Range)
+    If Not c.Comment Is Nothing Then c.Comment.Delete
 End Sub
 
 '==============================================================================
@@ -692,4 +727,4 @@ Private Sub AddLog(ByVal r As Long, ByVal sInput As String, ByVal evalDate As Va
     End With
     gLogRow = gLogRow + 1
 End Sub
-' ===== 아파트가격 코드 끝 (총 694줄) =====
+' ===== 아파트가격 코드 끝 (총 729줄) =====
