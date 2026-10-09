@@ -6,27 +6,44 @@ DART 재무제표 조회·엑셀 다운로드 웹페이지 (FastAPI 라우터)
   GET /dart/api/reports?corp_code=   감사보고서·사업보고서 목록
   GET /dart/api/annual?corp_code=&years=2023,2024,2025&fs_div=OFS
                                 연도별 BS(2025)·PL(2025) 시트 엑셀 (주 기능)
+                                corp_code 대신 corp_name만 줘도 됨 (엑셀 VBA용).
+                                동명 회사가 여럿이면 409 + 후보 목록(텍스트, 탭 구분)
   GET /dart/api/excel?...       보고서 1건의 전체 재무제표 엑셀
       mode=doc   : 공시 원문 표 파싱 (비상장 감사보고서 포함 모든 보고서)
       mode=xbrl  : OpenDART XBRL 재무제표 (사업보고서만, fs_div=CFS|OFS)
+
+접근 제한: 환경변수 DART_WEB_TOKEN을 설정하면 /dart/api/* 호출 시
+  헤더 X-Access-Token 또는 쿼리 token 값이 일치해야 함 (외부 배포 시 DART 인증키 호출한도 보호)
+  웹페이지는 /dart?token=... 으로 접속
 """
 
+import hmac
 import logging
+import os
 import re
 from datetime import date
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 import dart_client
 from dart_annual import collect_year
 from dart_excel import build_annual_workbook, build_workbook_from_document, build_workbook_from_xbrl
 from dart_parser import parse_document
 
-router = APIRouter(prefix="/dart")
 logger = logging.getLogger("dart_web")
+
+
+def require_token(token: str = Query(""), x_access_token: str = Header("")) -> None:
+    expected = os.environ.get("DART_WEB_TOKEN", "")
+    if expected and not hmac.compare_digest((x_access_token or token).encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="접근 토큰이 올바르지 않습니다.")
+
+
+router = APIRouter(prefix="/dart")
+api = APIRouter(prefix="/api", dependencies=[Depends(require_token)])
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 HTTP_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -48,7 +65,7 @@ async def page():
     return INDEX_HTML
 
 
-@router.get("/api/search")
+@api.get("/search")
 async def search(q: str = Query(..., min_length=1, max_length=50)):
     try:
         async with _client() as client:
@@ -58,7 +75,7 @@ async def search(q: str = Query(..., min_length=1, max_length=50)):
     return {"results": dart_client.search_corps(corps, q)}
 
 
-@router.get("/api/reports")
+@api.get("/reports")
 async def reports(corp_code: str = Query(..., pattern=r"^\d{8}$")):
     try:
         async with _client() as client:
@@ -68,10 +85,10 @@ async def reports(corp_code: str = Query(..., pattern=r"^\d{8}$")):
     return {"reports": items}
 
 
-@router.get("/api/annual")
+@api.get("/annual")
 async def annual(
-    corp_code: str = Query(..., pattern=r"^\d{8}$"),
     years: str = Query(..., pattern=r"^\d{4}(,\d{4}){0,14}$"),
+    corp_code: str = Query("", pattern=r"^(\d{8})?$"),
     corp_name: str = Query("", max_length=100),
     stock_code: str = Query("", max_length=10),
     fs_div: str = Query("OFS", pattern=r"^(CFS|OFS)$"),
@@ -79,8 +96,16 @@ async def annual(
     year_list = sorted({int(y) for y in years.split(",")}, reverse=True)
     if not all(1999 <= y <= date.today().year for y in year_list):
         raise HTTPException(status_code=400, detail="조회연도를 확인해 주세요.")
+    if not corp_code and not corp_name.strip():
+        raise HTTPException(status_code=400, detail="회사명 또는 고유번호를 입력해 주세요.")
     try:
         async with _client() as client:
+            if not corp_code:
+                # 엑셀 VBA 등에서 회사명만 보낸 경우
+                corp, candidates = dart_client.resolve_corp(await dart_client.load_corp_list(client), corp_name)
+                if corp is None:
+                    return _candidates_response(corp_name, candidates)
+                corp_code, corp_name, stock_code = corp["corp_code"], corp["corp_name"], corp["stock_code"]
             reports = await dart_client.list_reports(client, corp_code, begin=date(min(year_list), 1, 1))
             results = [await collect_year(client, corp_code, y, fs_div, reports) for y in year_list]
     except Exception as exc:
@@ -92,7 +117,7 @@ async def annual(
     return _xlsx_response(content, f"{corp_name or corp_code}_재무제표_{span}.xlsx")
 
 
-@router.get("/api/excel")
+@api.get("/excel")
 async def excel(
     rcept_no: str = Query(..., pattern=r"^\d{14}$"),
     corp_code: str = Query(..., pattern=r"^\d{8}$"),
@@ -127,6 +152,15 @@ async def excel(
     return _xlsx_response(content, f"{corp_name or corp_code}_{rcept_dt or rcept_no}_{suffix}.xlsx")
 
 
+def _candidates_response(name: str, candidates: list[dict]) -> PlainTextResponse:
+    """회사를 확정하지 못한 경우: 404(없음) / 409(후보 여럿). 본문은 '고유번호<TAB>회사명<TAB>구분' 행"""
+    if not candidates:
+        return PlainTextResponse(f"'{name}'(으)로 검색된 회사가 없습니다.", status_code=404)
+    lines = [f"{c['corp_code']}\t{c['corp_name']}\t{'상장 ' + c['stock_code'] if c['stock_code'] else '비상장'}"
+             for c in candidates]
+    return PlainTextResponse("\n".join(lines), status_code=409)
+
+
 def _xlsx_response(content: bytes, filename: str) -> Response:
     filename = _safe_filename(filename)
     return Response(
@@ -138,6 +172,9 @@ def _xlsx_response(content: bytes, filename: str) -> Response:
 
 def _safe_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|\r\n]+', "_", name)
+
+
+router.include_router(api)
 
 
 INDEX_HTML = """<!doctype html>
@@ -215,9 +252,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&
 const errText = (b, status) => typeof b.detail === "string" ? b.detail : `요청을 처리하지 못했습니다 (${status})`;
 const fmtDate = (d) => d && d.length === 8 ? `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6)}` : esc(d);
 let corp = null;
+const token = new URLSearchParams(location.search).get("token") || "";
+const authHeaders = token ? { "X-Access-Token": token } : {};
 
 async function getJSON(url) {
-  const r = await fetch(url);
+  const r = await fetch(url, { headers: authHeaders });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errText(body, r.status));
   return body;
@@ -308,7 +347,7 @@ async function fetchFile(btn, url, busyLabel) {
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = busyLabel;
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: authHeaders });
     if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(errText(b, res.status)); }
     const blob = await res.blob();
     const cd = res.headers.get("Content-Disposition") || "";

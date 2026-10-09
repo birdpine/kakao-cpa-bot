@@ -281,3 +281,60 @@ def test_annual_rejects_bad_years():
     client = TestClient(app)
     assert client.get("/dart/api/annual", params={"corp_code": "00123456", "years": "abcd"}).status_code == 422
     assert client.get("/dart/api/annual", params={"corp_code": "00123456", "years": "2099"}).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 엑셀 VBA용: 회사명만으로 조회, 접근 토큰
+# ---------------------------------------------------------------------------
+
+CORPS = [
+    {"corp_code": "00123456", "corp_name": "테스트건설", "stock_code": "", "modify_date": "", "norm": "테스트건설"},
+    {"corp_code": "00123457", "corp_name": "테스트건설산업", "stock_code": "", "modify_date": "", "norm": "테스트건설산업"},
+    {"corp_code": "00200001", "corp_name": "동명상사", "stock_code": "", "modify_date": "", "norm": "동명상사"},
+    {"corp_code": "00200002", "corp_name": "동명상사", "stock_code": "012340", "modify_date": "", "norm": "동명상사"},
+]
+
+
+def test_resolve_corp():
+    assert dart_client.resolve_corp(CORPS, "(주)테스트건설")[0]["corp_code"] == "00123456"   # 정확 일치 우선
+    assert dart_client.resolve_corp(CORPS, "건설산업")[0]["corp_code"] == "00123457"        # 부분일치 1건
+    corp, candidates = dart_client.resolve_corp(CORPS, "동명상사")
+    assert corp is None and len(candidates) == 2
+    assert dart_client.resolve_corp(CORPS, "없는회사") == (None, [])
+
+
+def test_annual_by_name(monkeypatch):
+    async def fake_corps(client):
+        return CORPS
+    monkeypatch.setattr(dart_client, "load_corp_list", fake_corps)
+    _patch_dart(monkeypatch, [_report("20250320000002", "감사보고서 (2024.12)")], {"20250320000002": [SAMPLE]})
+    client = TestClient(app)
+
+    resp = client.get("/dart/api/annual", params={"corp_name": "테스트건설", "years": "2024"})
+    assert resp.status_code == 200
+    assert "테스트건설" in load_workbook(io.BytesIO(resp.content))["정보"]["A1"].value
+
+    dup = client.get("/dart/api/annual", params={"corp_name": "동명상사", "years": "2024"})
+    assert dup.status_code == 409
+    assert dup.text.splitlines() == ["00200002\t동명상사\t상장 012340", "00200001\t동명상사\t비상장"]  # 상장사 우선
+
+    assert client.get("/dart/api/annual", params={"corp_name": "없는회사", "years": "2024"}).status_code == 404
+    assert client.get("/dart/api/annual", params={"years": "2024"}).status_code == 400
+
+
+def test_access_token(monkeypatch):
+    monkeypatch.setenv("DART_WEB_TOKEN", "secret")
+    client = TestClient(app)
+    assert client.get("/dart/api/annual", params={"years": "2024"}).status_code == 401
+    assert client.get("/dart/api/annual", params={"years": "2024", "token": "wrong"}).status_code == 401
+    assert client.get("/dart/api/annual", params={"years": "2024"}, headers={"X-Access-Token": "secret"}).status_code == 400
+    assert client.get("/dart").status_code == 200     # 페이지 자체는 공개, API만 보호
+
+
+def test_vba_import_file_matches_source():
+    """excel/DartFS.bas(가져오기용, CP949·CRLF)는 DartFS_utf8.bas와 내용이 같아야 함"""
+    excel_dir = Path(__file__).parent.parent / "excel"
+    source = (excel_dir / "DartFS_utf8.bas").read_text(encoding="utf-8").replace("\r\n", "\n")
+    imported = (excel_dir / "DartFS.bas").read_bytes()
+    assert imported == source.replace("\n", "\r\n").encode("cp949")
+    assert imported.startswith(b'Attribute VB_Name = "DartFS"')

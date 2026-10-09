@@ -106,6 +106,25 @@ def search_corps(corps: list[dict], query: str, limit: int = 50) -> list[dict]:
     return [{k: v for k, v in c.items() if k != "norm"} for c in hits[:limit]]
 
 
+def resolve_corp(corps: list[dict], name: str) -> tuple[dict | None, list[dict]]:
+    """
+    회사명 하나로 회사 확정. (확정된 회사, 후보 목록)
+    정확히 일치하는 회사가 1개이거나, 부분일치 결과가 1개뿐이면 확정. 그 외에는 후보만 반환
+    """
+    hits = search_corps(corps, name)
+    q = normalize_name(name)
+    exact = [h for h in hits if normalize_name(h["corp_name"]) == q]
+    if len(exact) == 1:
+        return exact[0], exact
+    if not exact and len(hits) == 1:
+        return hits[0], hits
+    return None, exact or hits
+
+
+def find_corp(corps: list[dict], corp_code: str) -> dict | None:
+    return next((c for c in corps if c["corp_code"] == corp_code), None)
+
+
 # ---------------------------------------------------------------------------
 # 공시 목록 (list.json)
 # ---------------------------------------------------------------------------
