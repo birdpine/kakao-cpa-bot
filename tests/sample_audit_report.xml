@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DOCUMENT>
+<DOCUMENT-NAME ACODE="00760">감사보고서</DOCUMENT-NAME>
+<COMPANY-NAME AREGCIK="00123456">주식회사 테스트건설</COMPANY-NAME>
+<BODY>
+<SECTION-1>
+<TITLE ATOC="Y">독립된 감사인의 감사보고서</TITLE>
+<P>우리는 주식회사 테스트건설(이하 "회사")의 재무제표를 감사하였습니다. 해당 재무제표는 2024년 12월 31일 현재의 재무상태표, 동일로 종료되는 보고기간의 손익계산서, 자본변동표, 현금흐름표 그리고 중요한 회계정책 정보를 포함한 재무제표의 주석으로 구성되어 있습니다.</P>
+</SECTION-1>
+<SECTION-1>
+<TITLE ATOC="Y">(첨부)재 무 제 표</TITLE>
+<TABLE BORDER="0" WIDTH="600">
+<TBODY>
+<TR><TD ALIGN="CENTER"><P>재 무 상 태 표</P></TD></TR>
+<TR><TD ALIGN="CENTER">제 10(당) 기 2024년 12월 31일 현재</TD></TR>
+<TR><TD ALIGN="CENTER">제 9(전) 기 2023년 12월 31일 현재</TD></TR>
+<TR><TD>주식회사 테스트건설</TD><TD ALIGN="RIGHT">(단위 : 천원)</TD></TR>
+</TBODY>
+</TABLE>
+<TABLE BORDER="1" WIDTH="600">
+<THEAD>
+<TR><TH ROWSPAN="2">과 목</TH><TH ROWSPAN="2">주 석</TH><TH COLSPAN="2">제 10(당) 기</TH><TH COLSPAN="2">제 9(전) 기</TH></TR>
+<TR><TH COLSPAN="2">2024.12.31</TH><TH COLSPAN="2">2023.12.31</TH></TR>
+</THEAD>
+<TBODY>
+<TR><TD>자산</TD><TD></TD><TE></TE><TE></TE><TE></TE><TE></TE></TR>
+<TR><TD>Ⅰ. 유동자산</TD><TD></TD><TE></TE><TE>1,500,000</TE><TE></TE><TE>1,200,000</TE></TR>
+<TR><TD>  현금및현금성자산</TD><TD>4,5</TD><TE>300,000</TE><TE></TE><TE>250,000</TE><TE></TE></TR>
+<TR><TD>  매출채권</TD><TD>6</TD><TE>1,250,000</TE><TE></TE><TE>1,000,000</TE><TE></TE></TR>
+<TR><TD>  대손충당금</TD><TD>6</TD><TE>(50,000)</TE><TE></TE><TE>△50,000</TE><TE></TE></TR>
+<TR><TD>  단기대여금</TD><TD></TD><TE>-</TE><TE></TE><TE>-</TE><TE></TE></TR>
+<TR><TD>자산총계</TD><TD></TD><TE></TE><TE>1,500,000</TE><TE></TE><TE>1,200,000</TE></TR>
+</TBODY>
+</TABLE>
+<P>손 익 계 산 서</P>
+<P>제 10(당) 기 2024년 1월 1일부터 2024년 12월 31일까지</P>
+<P ALIGN="RIGHT">(단위: 천원)</P>
+<TABLE BORDER="1">
+<TBODY>
+<TR><TU>과목</TU><TU>주석</TU><TU>제 10(당) 기</TU><TU>제 9(전) 기</TU></TR>
+<TR><TD>Ⅰ. 매출액</TD><TD>20</TD><TE>5,000,000</TE><TE>4,000,000</TE></TR>
+<TR><TD>Ⅱ. 매출원가</TD><TD>21</TD><TE>4,000,000</TE><TE>3,300,000</TE></TR>
+<TR><TD>Ⅲ. 당기순이익(손실)</TD><TD></TD><TE>120,000</TE><TE>(30,000)</TE></TR>
+<TR><TD>Ⅳ. 주당이익(손실)</TD><TD>25</TD><TE>1,200</TE><TE>(300)</TE></TR>
+</TBODY>
+</TABLE>
+<TABLE BORDER="0"><TBODY><TR><TD>현 금 흐 름 표</TD></TR><TR><TD>(단위 : 원)</TD></TR></TBODY></TABLE>
+<TABLE BORDER="1">
+<TBODY>
+<TR><TD>구분</TD><TD>제 10(당) 기</TD><TD>제 9(전) 기</TD></TR>
+<TR><TD>영업활동현금흐름</TD><TE>10,000,000</TE><TE>9,000,000</TE></TR>
+<TR><TD>투자활동현금흐름</TD><TE>(3,000,000)</TE><TE>(2,500,000)</TE></TR>
+<TR><TD>재무활동현금흐름</TD><TE>(1,000,000)</TE><TE>-</TE></TR>
+</TBODY>
+</TABLE>
+</SECTION-1>
+<SECTION-1>
+<TITLE ATOC="Y">주석</TITLE>
+<P>(2) 요약 재무상태표</P>
+<TABLE BORDER="1">
+<TBODY>
+<TR><TD>구분</TD><TD>당기</TD><TD>전기</TD></TR>
+<TR><TD>자산</TD><TE>999,999</TE><TE>888,888</TE></TR>
+<TR><TD>부채</TD><TE>111,111</TE><TE>222,222</TE></TR>
+<TR><TD>자본</TD><TE>333,333</TE><TE>444,444</TE></TR>
+</TBODY>
+</TABLE>
+</SECTION-1>
+</BODY>
+</DOCUMENT>

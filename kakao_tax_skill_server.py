@@ -8,9 +8,10 @@
 4. 오픈빌더가 요구하는 JSON 포맷으로 답변을 반환 -> 사용자 채팅창에 출력
 
 실행 전 준비:
-  pip install fastapi uvicorn httpx
+  pip install -r requirements.txt
   export ANTHROPIC_API_KEY="sk-ant-..."
   export LAWGOKR_OC="본인의-law.go.kr-인증키"   # 없으면 법령 조회 없이 Claude 기본 지식으로만 답변
+  export DART_API_KEY="본인의-OpenDART-인증키"   # DART 재무제표 조회 페이지(/dart)용
   uvicorn kakao_tax_skill_server:app --host 0.0.0.0 --port 8000
 
 배포 시:
@@ -33,7 +34,10 @@ import xml.etree.ElementTree as ET
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Request
 
+from dart_web import router as dart_router
+
 app = FastAPI()
+app.include_router(dart_router)  # DART 재무제표 조회 페이지: /dart
 logger = logging.getLogger("kakao_tax_skill")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
