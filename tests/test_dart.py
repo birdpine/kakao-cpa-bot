@@ -81,7 +81,7 @@ def test_document_workbook():
     header = next(c for c in ws["A"] if c.value == "과 목")
     assert header.alignment.horizontal == "center"
     amount = next(row for row in ws.iter_rows() if row[0].value == "매출채권")[2]
-    assert amount.value == 1_250_000_000 and amount.number_format.startswith("#,##0")
+    assert amount.value == 1_250_000 and amount.number_format.startswith("#,##0")     # 천원(기본)
     notes = [c.value for c in wb["정보"]["B"] if c.value]
     assert any("자본변동표" in str(n) for n in notes)     # 누락 재무제표 안내
 
@@ -106,7 +106,7 @@ def test_xbrl_workbook():
     rows = [[c.value for c in r] for r in ws.iter_rows(min_row=4)]
     assert rows[0] == ["계정명", "계정ID", "제 56 기", "제 55 기", "제 54 기"]
     assert rows[1][0] == "유동자산" and rows[1][4] is None      # ord 순 정렬, '-'는 빈칸
-    assert rows[2][2] == 455_905_980_000_000
+    assert rows[2][2] == 455_905_980_000
 
 
 def test_search_corps_ranking():
@@ -240,7 +240,7 @@ def test_annual_unlisted_by_year(monkeypatch):
     _patch_dart(monkeypatch, reports, {"20250320000002": [SAMPLE], "20240320000001": [SAMPLE]})
     wb = _annual({"years": "2022,2023,2024"})
     assert wb.sheetnames == ["정보", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
-    assert _value(wb["BS(2024)"], "매출채권", 2) == 1_250_000_000
+    assert _value(wb["BS(2024)"], "매출채권", 2) == 1_250_000
     info = [row for row in wb["정보"].iter_rows(min_row=6, values_only=True)]
     assert [r[0] for r in info] == [2024, 2023, 2022]
     assert info[2][1] == "해당 연도 보고서 없음"
@@ -250,9 +250,9 @@ def test_annual_selects_separate_or_consolidated(monkeypatch):
     reports = [_report("20250320000002", "감사보고서 (2024.12)"), _report("20250320000003", "연결감사보고서 (2024.12)")]
     docs = {"20250320000002": [SAMPLE], "20250320000003": [CONSOLIDATED]}
     _patch_dart(monkeypatch, reports, docs)
-    assert _value(_annual({"years": "2024", "fs_div": "OFS"})["BS(2024)"], "현금및현금성자산", 2) == 300_000_000
+    assert _value(_annual({"years": "2024", "fs_div": "OFS"})["BS(2024)"], "현금및현금성자산", 2) == 300_000
     wb = _annual({"years": "2024", "fs_div": "CFS"})
-    assert _value(wb["BS(2024)"], "현금및현금성자산", 2) == 777_000_000
+    assert _value(wb["BS(2024)"], "현금및현금성자산", 2) == 777_000
     assert wb["BS(2024)"]["A1"].value == "연결재무상태표"
 
 
@@ -271,8 +271,8 @@ def test_annual_listed_uses_xbrl_then_document(monkeypatch):
     _patch_dart(monkeypatch, reports, docs, xbrl={2024: XBRL_ITEMS})
     wb = _annual({"years": "2023,2024", "fs_div": "OFS"})
     assert wb.sheetnames == ["정보", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
-    assert _value(wb["PL(2024)"], "수익(매출액)", 2) == 500                 # IS 없으면 CIS
-    assert _value(wb["BS(2023)"], "현금및현금성자산", 2) == 300_000_000      # 별도 선택
+    assert _value(wb["PL(2024)"], "수익(매출액)", 2) == 0.5                 # IS 없으면 CIS, 500원 = 0.5천원
+    assert _value(wb["BS(2023)"], "현금및현금성자산", 2) == 300_000          # 별도 선택
     info = list(wb["정보"].iter_rows(min_row=6, values_only=True))
     assert info[0][3] == "XBRL (별도)" and info[1][3] == "원문 파싱"
 
@@ -338,3 +338,35 @@ def test_vba_import_file_matches_source():
     imported = (excel_dir / "DartFS.bas").read_bytes()
     assert imported == source.replace("\n", "\r\n").encode("cp949")
     assert imported.startswith(b'Attribute VB_Name = "DartFS"')
+
+
+# ---------------------------------------------------------------------------
+# 금액 단위 (기본 천원)
+# ---------------------------------------------------------------------------
+
+def test_thousand_won_unit(monkeypatch):
+    _patch_dart(monkeypatch, [_report("20250320000002", "감사보고서 (2024.12)")], {"20250320000002": [SAMPLE]})
+    ws = _annual({"years": "2024"})["PL(2024)"]
+    assert ws["A3"].value.startswith("(단위: 천원)")                    # 원문 단위 천원 그대로
+    assert _value(ws, "Ⅰ. 매출액", 2) == 5_000_000
+    assert _value(ws, "Ⅲ. 당기순이익(손실)", 3) == -30_000
+    assert _value(ws, "Ⅳ. 주당이익(손실)", 2) == 1_200                 # 주당이익은 원 단위 유지
+
+    ws = _annual({"years": "2024", "unit": "원"})["PL(2024)"]
+    assert ws["A3"].value.startswith("(단위: 원)") and "천원 → 원" in ws["A3"].value
+    assert _value(ws, "Ⅰ. 매출액", 2) == 5_000_000_000
+
+
+def test_thousand_won_keeps_precision():
+    """원 단위 공시를 천원으로 바꿀 때 셀 값은 반올림하지 않음 (합계 단수차이 방지)"""
+    items = [{"sj_div": "BS", "ord": "1", "account_id": "a", "account_nm": "현금", "thstrm_nm": "당기",
+              "thstrm_amount": "1234567", "frmtrm_nm": "전기", "frmtrm_amount": "-2500"}]
+    ws = load_workbook(io.BytesIO(build_workbook_from_xbrl({}, items, 2024, "OFS")))["별도재무상태표"]
+    row = next(r for r in ws.iter_rows(min_row=5) if r[0].value == "현금")
+    assert row[2].value == 1234.567 and row[2].number_format == '#,##0;(#,##0);"-"'   # 표시는 1,235
+    assert row[3].value == -2.5
+
+
+def test_unit_validation():
+    resp = TestClient(app).get("/dart/api/annual", params={"corp_code": "00123456", "years": "2024", "unit": "백만원"})
+    assert resp.status_code == 422

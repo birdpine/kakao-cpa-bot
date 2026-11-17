@@ -4,7 +4,7 @@ DART 재무제표 조회·엑셀 다운로드 웹페이지 (FastAPI 라우터)
   GET /dart                     조회 화면
   GET /dart/api/search?q=       회사 검색 (상장·비상장)
   GET /dart/api/reports?corp_code=   감사보고서·사업보고서 목록
-  GET /dart/api/annual?corp_code=&years=2023,2024,2025&fs_div=OFS
+  GET /dart/api/annual?corp_code=&years=2023,2024,2025&fs_div=OFS&unit=천원
                                 연도별 BS(2025)·PL(2025) 시트 엑셀 (주 기능)
                                 corp_code 대신 corp_name만 줘도 됨 (엑셀 VBA용).
                                 동명 회사가 여럿이면 409 + 후보 목록(텍스트, 탭 구분)
@@ -30,7 +30,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 import dart_client
 from dart_annual import collect_year
-from dart_excel import build_annual_workbook, build_workbook_from_document, build_workbook_from_xbrl
+from dart_excel import (DEFAULT_UNIT, build_annual_workbook, build_workbook_from_document,
+                        build_workbook_from_xbrl)
 from dart_parser import parse_document
 
 logger = logging.getLogger("dart_web")
@@ -92,6 +93,7 @@ async def annual(
     corp_name: str = Query("", max_length=100),
     stock_code: str = Query("", max_length=10),
     fs_div: str = Query("OFS", pattern=r"^(CFS|OFS)$"),
+    unit: str = Query(DEFAULT_UNIT, pattern=r"^(원|천원)$"),
 ):
     year_list = sorted({int(y) for y in years.split(",")}, reverse=True)
     if not all(1999 <= y <= date.today().year for y in year_list):
@@ -112,7 +114,7 @@ async def annual(
         raise _dart_error(exc)
 
     meta = {"corp_code": corp_code, "corp_name": corp_name, "stock_code": stock_code}
-    content = build_annual_workbook(meta, results, fs_div)
+    content = build_annual_workbook(meta, results, fs_div, unit)
     span = f"{year_list[-1]}-{year_list[0]}" if len(year_list) > 1 else str(year_list[0])
     return _xlsx_response(content, f"{corp_name or corp_code}_재무제표_{span}.xlsx")
 
@@ -127,6 +129,7 @@ async def excel(
     rcept_dt: str = Query("", max_length=8),
     mode: str = Query("doc", pattern=r"^(doc|xbrl)$"),
     fs_div: str = Query("CFS", pattern=r"^(CFS|OFS)$"),
+    unit: str = Query(DEFAULT_UNIT, pattern=r"^(원|천원)$"),
 ):
     meta = {"rcept_no": rcept_no, "corp_code": corp_code, "corp_name": corp_name,
             "stock_code": stock_code, "report_nm": report_nm, "rcept_dt": rcept_dt}
@@ -137,12 +140,12 @@ async def excel(
                 if year is None:
                     raise HTTPException(status_code=400, detail="사업보고서명에서 사업연도를 찾지 못했습니다.")
                 bsns_year, items = await dart_client.fetch_xbrl_statements(client, corp_code, year, fs_div)
-                content = build_workbook_from_xbrl(meta, items, bsns_year, fs_div)
+                content = build_workbook_from_xbrl(meta, items, bsns_year, fs_div, unit)
                 suffix = "XBRL_연결" if fs_div == "CFS" else "XBRL_별도"
             else:
                 files = await dart_client.fetch_document_files(client, rcept_no)
                 result = parse_document([text for _, text in files])
-                content = build_workbook_from_document(meta, result)
+                content = build_workbook_from_document(meta, result, unit)
                 suffix = "감사보고서" if "감사보고서" in report_nm else "원문"
     except HTTPException:
         raise
@@ -313,15 +316,25 @@ function renderAnnual(reports) {
       <label><input type="radio" name="fs" value="OFS" checked>별도</label>
       <label><input type="radio" name="fs" value="CFS" ${hasConsolidated ? "" : "disabled"}>연결${hasConsolidated ? "" : " (해당 없음)"}</label>
     </div>
+    <p class="label">금액 단위</p>
+    <div class="fs">
+      <label><input type="radio" name="unit" value="천원" checked>천원</label>
+      <label><input type="radio" name="unit" value="원">원</label>
+    </div>
     <button id="annualBtn">연도별 BS·PL 엑셀 다운로드</button>`;
   $("annualBtn").addEventListener("click", async () => {
     const ys = [...$("annual").querySelectorAll(".years input:checked")].map(i => i.value);
     if (!ys.length) { alert("조회연도를 하나 이상 선택해 주세요."); return; }
     const fs = $("annual").querySelector('input[name="fs"]:checked').value;
     const p = new URLSearchParams({ corp_code: corp.corp_code, corp_name: corp.corp_name,
-      stock_code: corp.stock_code || "", years: ys.join(","), fs_div: fs });
+      stock_code: corp.stock_code || "", years: ys.join(","), fs_div: fs, unit: selectedUnit() });
     await fetchFile($("annualBtn"), `/dart/api/annual?${p}`, `연도별 재무제표 생성 중… (${ys.length}개 연도)`);
   });
+}
+
+function selectedUnit() {
+  const el = document.querySelector('input[name="unit"]:checked');
+  return el ? el.value : "천원";
 }
 
 function renderReports(reports) {
@@ -338,7 +351,8 @@ function renderReports(reports) {
 
 async function download(btn, r) {
   const p = new URLSearchParams({ rcept_no: r.rcept_no, corp_code: corp.corp_code, corp_name: corp.corp_name,
-    stock_code: corp.stock_code || "", report_nm: r.report_nm, rcept_dt: r.rcept_dt, mode: btn.dataset.mode });
+    stock_code: corp.stock_code || "", report_nm: r.report_nm, rcept_dt: r.rcept_dt, mode: btn.dataset.mode,
+    unit: selectedUnit() });
   if (btn.dataset.fs) p.set("fs_div", btn.dataset.fs);
   await fetchFile(btn, `/dart/api/excel?${p}`, "생성 중…");
 }

@@ -26,6 +26,7 @@ Private Const CELL_FROM As String = "B4"      ' 시작연도
 Private Const CELL_TO As String = "B5"        ' 종료연도
 Private Const CELL_FS As String = "B6"        ' 구분 (별도/연결)
 Private Const CELL_CODE As String = "B7"      ' 고유번호 (동명 회사일 때만)
+Private Const CELL_UNIT As String = "B8"      ' 금액단위 (천원/원, 비어 있으면 천원)
 Private Const CELL_SERVER As String = "B9"    ' 서버 주소
 Private Const CELL_TOKEN As String = "B10"    ' 접근 토큰 (서버에 설정한 경우만)
 Private Const CELL_STATUS As String = "B12"   ' 진행상태 표시
@@ -57,7 +58,7 @@ Public Sub SetupDartSheet()
         .Range("A1").Font.Bold = True
         .Range("A1").Font.Size = 14
 
-        labels = Array("회사명", "시작연도", "종료연도", "구분", "고유번호(선택)", "", "서버주소", "접근토큰(선택)", "", "상태")
+        labels = Array("회사명", "시작연도", "종료연도", "구분", "고유번호(선택)", "금액단위", "서버주소", "접근토큰(선택)", "", "상태")
         For i = LBound(labels) To UBound(labels)
             .Cells(3 + i, 1).Value = labels(i)
             .Cells(3 + i, 1).Font.Bold = True
@@ -67,6 +68,7 @@ Public Sub SetupDartSheet()
         If IsEmpty(.Range(CELL_FROM).Value) Then .Range(CELL_FROM).Value = Year(Date) - 3
         If IsEmpty(.Range(CELL_TO).Value) Then .Range(CELL_TO).Value = Year(Date) - 1
         If IsEmpty(.Range(CELL_FS).Value) Then .Range(CELL_FS).Value = "별도"
+        If IsEmpty(.Range(CELL_UNIT).Value) Then .Range(CELL_UNIT).Value = "천원"
         If IsEmpty(.Range(CELL_SERVER).Value) Then .Range(CELL_SERVER).Value = DEFAULT_SERVER
 
         ' 구분: 목록 선택
@@ -75,11 +77,17 @@ Public Sub SetupDartSheet()
             .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Formula1:="별도,연결"
         End With
 
+        ' 금액단위: 목록 선택
+        With .Range(CELL_UNIT).Validation
+            .Delete
+            .Add Type:=xlValidateList, AlertStyle:=xlValidAlertStop, Formula1:="천원,원"
+        End With
+
         ' 고유번호는 앞자리 0 보존을 위해 텍스트 서식
         .Range(CELL_CODE).NumberFormat = "@"
 
         ' 입력칸 표시
-        With .Range(CELL_NAME & ":" & CELL_CODE & "," & CELL_SERVER & ":" & CELL_TOKEN)
+        With .Range(CELL_NAME & ":" & CELL_UNIT & "," & CELL_SERVER & ":" & CELL_TOKEN)
             .Interior.Color = RGB(255, 249, 219)
             .Borders.LineStyle = xlContinuous
             .Borders.Color = RGB(191, 191, 191)
@@ -88,7 +96,8 @@ Public Sub SetupDartSheet()
         .Range("D7").Value = "※ 동명 회사가 여러 개일 때만 아래 목록의 고유번호(8자리)를 입력하세요. 평소에는 비워 둡니다."
         .Range("D8").Value = "※ 연도 = 사업연도 종료연도 (예: 2024년 12월 결산 → 2024)"
         .Range("D9").Value = "※ 서버를 내 PC에서 실행하면 http://localhost:8000, 배포했으면 그 주소(https://...)"
-        .Range("D7:D9").Font.Color = RGB(102, 102, 102)
+        .Range("D10").Value = "※ 금액단위 천원: 셀 값은 원÷1,000(소수 보존), 표시만 정수 → 합계 단수차이 없음. 주당이익은 원 단위"
+        .Range("D7:D10").Font.Color = RGB(102, 102, 102)
 
         .Columns("A").ColumnWidth = 16
         .Columns("B").ColumnWidth = 34
@@ -115,6 +124,7 @@ Public Sub GetDartStatements()
     Dim serverUrl As String
     Dim token As String
     Dim fsDiv As String
+    Dim unitText As String
     Dim years As String
     Dim url As String
     Dim yearFrom As Long
@@ -174,8 +184,10 @@ Public Sub GetDartStatements()
     Next y
 
     fsDiv = IIf(Trim$(CStr(ws.Range(CELL_FS).Value)) = "연결", "CFS", "OFS")
+    unitText = IIf(Trim$(CStr(ws.Range(CELL_UNIT).Value)) = "원", "원", "천원")   ' 비어 있으면 천원
 
-    url = serverUrl & "/dart/api/annual?years=" & years & "&fs_div=" & fsDiv
+    url = serverUrl & "/dart/api/annual?years=" & years & "&fs_div=" & fsDiv & _
+          "&unit=" & Application.WorksheetFunction.EncodeURL(unitText)
     If corpCode <> "" Then
         url = url & "&corp_code=" & corpCode
     Else
