@@ -6,8 +6,8 @@ Attribute VB_Name = "DartFS"
 '   1. 이 모듈을 매크로 사용 통합문서(.xlsm)에 가져오기(Import)
 '   2. 최초 1회 SetupDartSheet 실행 → '조회' 시트와 [재무제표 가져오기] 버튼 생성
 '   3. '조회' 시트에 회사명·시작연도·종료연도·구분 입력 후 버튼 클릭
-'   4. BS(2025), PL(2025), BS(2024), PL(2024) ... 시트와 '조회정보' 시트가 생성됨
-'      (다시 조회하면 기존 BS(*), PL(*), 조회정보 시트는 삭제 후 새로 생성)
+'   4. '조회정보', '차입금', BS(2025), PL(2025), BS(2024), PL(2024) ... 시트가 생성됨
+'      (다시 조회하면 기존 BS(*), PL(*), 조회정보, 차입금 시트는 삭제 후 새로 생성)
 '
 '  동작 방식
 '   - DART 재무제표 서버(/dart/api/annual)를 호출해 엑셀 파일을 받은 뒤
@@ -34,6 +34,7 @@ Private Const CAND_HEADER_ROW As Long = 14    ' 동명 회사 후보 목록 시작 행
 
 ' --- 기타 설정 ---------------------------------------------------------------
 Private Const INFO_SHEET As String = "조회정보"            ' 서버 엑셀의 '정보' 시트를 이 이름으로 복사
+Private Const BORROWINGS_SHEET As String = "차입금"         ' 연도별 차입금 집계 시트
 Private Const DEFAULT_SERVER As String = "http://localhost:8000"
 Private Const MAX_YEARS As Long = 15
 Private Const RECEIVE_TIMEOUT_MS As Long = 300000           ' 연도가 많으면 수 분 걸릴 수 있음
@@ -278,7 +279,7 @@ Fail:
 End Function
 
 '------------------------------------------------------------------------------
-' 이전 조회 결과(BS(연도), PL(연도), 조회정보) 시트 삭제
+' 이전 조회 결과(BS(연도), PL(연도), 조회정보, 차입금) 시트 삭제
 '------------------------------------------------------------------------------
 Private Sub RemovePreviousResults()
     Dim i As Long
@@ -286,7 +287,7 @@ Private Sub RemovePreviousResults()
 
     For i = ThisWorkbook.Worksheets.Count To 1 Step -1
         nm = ThisWorkbook.Worksheets(i).Name
-        If nm Like "BS(####)" Or nm Like "PL(####)" Or nm = INFO_SHEET Then
+        If nm Like "BS(####)" Or nm Like "PL(####)" Or nm = INFO_SHEET Or nm = BORROWINGS_SHEET Then
             ThisWorkbook.Worksheets(i).Delete
         End If
     Next i

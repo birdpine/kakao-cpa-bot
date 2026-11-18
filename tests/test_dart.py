@@ -239,7 +239,7 @@ def test_annual_unlisted_by_year(monkeypatch):
     reports = [_report("20250320000002", "감사보고서 (2024.12)"), _report("20240320000001", "감사보고서 (2023.12)")]
     _patch_dart(monkeypatch, reports, {"20250320000002": [SAMPLE], "20240320000001": [SAMPLE]})
     wb = _annual({"years": "2022,2023,2024"})
-    assert wb.sheetnames == ["정보", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
+    assert wb.sheetnames == ["정보", "차입금", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
     assert _value(wb["BS(2024)"], "매출채권", 2) == 1_250_000
     info = [row for row in wb["정보"].iter_rows(min_row=6, values_only=True)]
     assert [r[0] for r in info] == [2024, 2023, 2022]
@@ -270,7 +270,7 @@ def test_annual_listed_uses_xbrl_then_document(monkeypatch):
     docs = {"20240311000009": [CONSOLIDATED, SAMPLE]}
     _patch_dart(monkeypatch, reports, docs, xbrl={2024: XBRL_ITEMS})
     wb = _annual({"years": "2023,2024", "fs_div": "OFS"})
-    assert wb.sheetnames == ["정보", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
+    assert wb.sheetnames == ["정보", "차입금", "BS(2024)", "PL(2024)", "BS(2023)", "PL(2023)"]
     assert _value(wb["PL(2024)"], "수익(매출액)", 2) == 0.5                 # IS 없으면 CIS, 500원 = 0.5천원
     assert _value(wb["BS(2023)"], "현금및현금성자산", 2) == 300_000          # 별도 선택
     info = list(wb["정보"].iter_rows(min_row=6, values_only=True))

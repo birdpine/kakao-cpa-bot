@@ -17,6 +17,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from dart_borrowings import CATEGORIES, EXCLUDED, BorrowingLine, extract_borrowings
 from dart_parser import STATEMENT_ORDER, ParseResult, Statement, sheet_name_for
 
 AMOUNT_FORMAT = '#,##0;(#,##0);"-"'
@@ -281,7 +282,91 @@ def build_annual_workbook(meta: dict, results: list[YearResult], fs_div: str, un
 
     for col, width in zip("ABCDEF", (8, 30, 18, 26, 22, 60)):
         ws.column_dimensions[col].width = width
+
+    _write_borrowings_sheet(wb, results, unit)
     return _to_bytes(wb)
+
+
+BORROWINGS_SHEET = "차입금"
+
+
+def _write_borrowings_sheet(wb: Workbook, results: list[YearResult], unit: str) -> None:
+    """
+    연도별 차입금 집계(위)와 원문 계정 명세(아래).
+    집계 셀은 명세를 SUMIFS로 합산하는 수식이라 엑셀에서 바로 검증 가능
+    """
+    years = [r.year for r in sorted(results, key=lambda r: r.year, reverse=True) if r.bs]
+    detail: list[tuple[int, BorrowingLine]] = []
+    for res in sorted(results, key=lambda r: r.year, reverse=True):
+        if res.bs:
+            detail += [(res.year, line) for line in extract_borrowings(res.bs.rows, res.bs.header_rows)]
+
+    ws = wb.create_sheet(BORROWINGS_SHEET, index=1)
+    ws["A1"] = "차입금 집계 (재무상태표 당기말 기준)"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = f"(단위: {unit})"
+    ws["A3"] = ("포함: " + ", ".join(CATEGORIES) + ". 현재가치할인차금·사채할인발행차금·전환권조정은 바로 위 "
+                "차입금 계정에서 차감, 사채상환할증금·할증발행차금은 가산. 각 금액은 아래 명세의 SUMIFS")
+    ws["A3"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=max(4, len(years) + 1))
+    ws.row_dimensions[3].height = 45
+
+    divisor = UNIT_DIVISORS[unit]
+    summary_header_row = 5
+    first_cat_row = summary_header_row + 1
+    total_row = first_cat_row + len(CATEGORIES)
+    detail_header_row = total_row + 3
+    first_detail_row = detail_header_row + 1
+    last_detail_row = max(first_detail_row, first_detail_row + len(detail) - 1)
+
+    def rng(col: str) -> str:
+        return f"${col}${first_detail_row}:${col}${last_detail_row}"
+
+    _header_cells(ws, summary_header_row, ["구분"] + years)
+    for i, category in enumerate(CATEGORIES):
+        r = first_cat_row + i
+        ws.cell(row=r, column=1, value=category).border = BORDER
+        for j, year in enumerate(years, start=2):
+            cell = ws.cell(row=r, column=j,
+                           value=f'=SUMIFS({rng("E")},{rng("A")},{year},{rng("B")},"{category}")')
+            cell.number_format, cell.border = AMOUNT_FORMAT, BORDER
+
+    ws.cell(row=total_row, column=1, value="차입금 합계").font = HEADER_FONT
+    ws.cell(row=total_row, column=1).border = BORDER
+    for j in range(2, len(years) + 2):
+        col = get_column_letter(j)
+        cell = ws.cell(row=total_row, column=j, value=f"=SUM({col}{first_cat_row}:{col}{total_row - 1})")
+        cell.number_format, cell.border, cell.font = AMOUNT_FORMAT, BORDER, HEADER_FONT
+
+    ws.cell(row=detail_header_row - 1, column=1, value="명세 (원문 재무상태표 계정)").font = HEADER_FONT
+    _header_cells(ws, detail_header_row, ["연도", "분류", "원문 계정명", "처리", f"금액({unit})"])
+    for i, (year, line) in enumerate(detail):
+        r = first_detail_row + i
+        values = [year, line.category, line.account, line.kind, _divide(line.amount, divisor)]
+        for c, v in enumerate(values, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = BORDER
+        ws.cell(row=r, column=5).number_format = AMOUNT_FORMAT
+        if line.category == EXCLUDED:
+            for c in range(1, 6):
+                ws.cell(row=r, column=c).font = Font(color="888888")
+    if not detail:
+        ws.cell(row=first_detail_row, column=1, value="재무상태표에서 차입금 계정을 찾지 못했습니다.")
+
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 30
+    ws.column_dimensions["D"].width = 26
+    ws.column_dimensions["E"].width = 18
+    for j in range(2, len(years) + 2):
+        letter = get_column_letter(j)
+        ws.column_dimensions[letter].width = max(ws.column_dimensions[letter].width or 0, 18)
+
+
+def _header_cells(ws: Worksheet, row: int, values: list) -> None:
+    for c, v in enumerate(values, start=1):
+        cell = ws.cell(row=row, column=c, value=v)
+        cell.font, cell.fill, cell.alignment, cell.border = HEADER_FONT, HEADER_FILL, CENTER, BORDER
 
 
 def _xbrl_amount(value: str | None):
