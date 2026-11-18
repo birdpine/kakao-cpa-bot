@@ -302,11 +302,12 @@ def _write_borrowings_sheet(wb: Workbook, results: list[YearResult], unit: str) 
             detail += [(res.year, line) for line in extract_borrowings(res.bs.rows, res.bs.header_rows)]
 
     ws = wb.create_sheet(BORROWINGS_SHEET, index=1)
-    ws["A1"] = "차입금 집계 (재무상태표 당기말 기준)"
+    ws["A1"] = "차입금 집계 (재무상태표 당기말, 액면가액 기준)"
     ws["A1"].font = TITLE_FONT
     ws["A2"] = f"(단위: {unit})"
-    ws["A3"] = ("포함: " + ", ".join(CATEGORIES) + ". 현재가치할인차금·사채할인발행차금·전환권조정은 바로 위 "
-                "차입금 계정에서 차감, 사채상환할증금·할증발행차금은 가산. 각 금액은 아래 명세의 SUMIFS")
+    ws["A3"] = ("포함: " + ", ".join(CATEGORIES) + " (유동성전환사채·유동성신주인수권부사채는 유동성사채). "
+                "액면가액 기준: 현재가치할인차금·사채할인발행차금·전환권조정·상환할증금 등 조정계정은 반영하지 않음. "
+                "각 금액은 아래 명세의 SUMIFS")
     ws["A3"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=max(4, len(years) + 1))
     ws.row_dimensions[3].height = 45

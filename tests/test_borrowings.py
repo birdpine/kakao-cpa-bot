@@ -47,10 +47,13 @@ BORROWING_BS = """
     ("(2) 사채", "사채"),
     ("장기차입금", "장기차입금"),
     ("전환사채", "전환사채"),
-    ("사채할인발행차금", "차감"),
-    ("현재가치할인차금", "차감"),
-    ("사채상환할증금", "가산"),
-    ("신주인수권부사채", "미포함"),
+    ("신주인수권부사채", "신주인수권부사채"),
+    ("유동성신주인수권부사채", "유동성사채"),
+    ("사채할인발행차금", "조정계정"),
+    ("현재가치할인차금", "조정계정"),
+    ("전환권조정", "조정계정"),
+    ("사채상환할증금", "조정계정"),
+    ("교환사채", "미포함"),
     ("장기미지급금", None),
     ("단기대여금", None),
 ])
@@ -58,7 +61,8 @@ def test_classify_borrowing_accounts(name, expected):
     assert classify(name) == expected
 
 
-def test_extract_borrowings_nets_discounts():
+def test_extract_borrowings_face_value():
+    """조정계정(할인차금·전환권조정·상환할증금)은 반영하지 않고 차입금 액면만 집계"""
     st = parse_document([BORROWING_BS]).get("BS", False)
     assert current_period_cols(st.rows, st.header_row_count) == [2, 3]
     by_cat: dict[str, list] = {}
@@ -67,16 +71,18 @@ def test_extract_borrowings_nets_discounts():
 
     assert by_cat["단기차입금"] == [("단기차입금", "차입금", 1_000_000)]
     assert by_cat["유동성장기부채"] == [("유동성장기차입금", "차입금", 300_000)]
-    assert by_cat["유동성사채"] == [("유동성사채", "차입금", 500_000), ("사채할인발행차금", "차감", -5_000)]
-    assert by_cat["사채"] == [("1. 사채 (주석9)", "차입금", 1_000_000), ("사채할인발행차금", "차감", -10_000)]
-    # 괄호 없이 양수로 적힌 현재가치할인차금도 차감. 합계 열(1,950)이 아닌 상세 열(50) 사용
-    assert by_cat["장기차입금"] == [("장기차입금", "차입금", 2_000_000), ("현재가치할인차금", "차감", -50_000)]
-    assert by_cat["전환사채"] == [("전환사채", "차입금", 700_000), ("전환권조정", "차감", -30_000),
-                               ("사채상환할증금", "가산", 15_000)]
-    # 임대보증금 아래 현재가치할인차금, 포함 범위 외 계정은 집계 제외 (명세에는 표시)
-    excluded = {account: kind for account, kind, _ in by_cat["미포함"]}
-    assert excluded == {"현재가치할인차금": "미포함(차입금 조정계정 아님)",
-                        "신주인수권부사채": "미포함(포함 범위 외)", "리스부채": "미포함(포함 범위 외)"}
+    assert by_cat["유동성사채"] == [("유동성사채", "차입금", 500_000)]
+    assert by_cat["사채"] == [("1. 사채 (주석9)", "차입금", 1_000_000)]
+    assert by_cat["장기차입금"] == [("장기차입금", "차입금", 2_000_000)]
+    assert by_cat["전환사채"] == [("전환사채", "차입금", 700_000)]
+    assert by_cat["신주인수권부사채"] == [("신주인수권부사채", "차입금", 100_000)]
+    # 조정계정과 범위 외 계정은 명세에 '미포함'으로만 표시
+    excluded = [(account, kind) for account, kind, _ in by_cat["미포함"]]
+    adjustment = "미포함(조정계정, 액면가액 기준)"
+    assert excluded == [("사채할인발행차금", adjustment), ("현재가치할인차금", adjustment),
+                        ("사채할인발행차금", adjustment), ("현재가치할인차금", adjustment),
+                        ("전환권조정", adjustment), ("사채상환할증금", adjustment),
+                        ("리스부채", "미포함(포함 범위 외)")]
 
 
 def test_current_period_cols_variants():
@@ -103,14 +109,15 @@ def test_borrowings_sheet(monkeypatch):
     ws = load_workbook(io.BytesIO(resp.content))["차입금"]
 
     assert [c.value for c in ws[5]][:3] == ["구분", 2024, 2023]
-    rows = {ws.cell(row=r, column=1).value: r for r in range(6, 13)}
-    # 원문 천원 단위 그대로 (예: 장기차입금 2,000 - 현재가치할인차금 50 = 1,950)
-    expected_2024 = {"단기차입금": 1_000, "유동성장기부채": 300, "유동성사채": 495,
-                     "사채": 990, "장기차입금": 1_950, "전환사채": 685}
+    rows = {ws.cell(row=r, column=1).value: r for r in range(6, 14)}
+    # 원문 천원 단위 그대로, 액면가액 기준 (현재가치할인차금 등 미반영)
+    expected_2024 = {"단기차입금": 1_000, "유동성장기부채": 300, "유동성사채": 500, "사채": 1_000,
+                     "장기차입금": 2_000, "전환사채": 700, "신주인수권부사채": 100}
     for category, amount in expected_2024.items():
         assert _sumifs(ws, ws.cell(row=rows[category], column=2).value) == amount
         assert _sumifs(ws, ws.cell(row=rows[category], column=3).value) == 0      # 2023: 차입금 계정 없음
-    assert ws.cell(row=rows["차입금 합계"], column=2).value == "=SUM(B6:B11)"
+    assert ws.cell(row=rows["차입금 합계"], column=2).value == "=SUM(B6:B12)"
+    assert sum(expected_2024.values()) == 5_600
 
     # 명세: 미포함 행도 표시하되 SUMIFS 분류가 달라 합계에서 빠짐
     detail = [[c.value for c in r] for r in ws.iter_rows(min_row=16) if r[0].value]
